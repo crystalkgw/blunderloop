@@ -143,6 +143,18 @@
   <header class="top">
     <div class="logo"><b>Blunder</b>loop</div>
     <div class="tag">Train on the mistakes you actually make.</div>
+    <div id="acctBar" style="display:none;margin-left:auto;align-items:center;gap:8px;font-size:13px">
+      <span id="acctIn" style="display:none;align-items:center;gap:8px">
+        <span>👤 <b id="acctName"></b></span><span id="syncDot" class="muted"></span>
+        <button class="btn sec" id="acctOut" style="padding:5px 10px">Sign out</button>
+      </span>
+      <span id="acctForms" style="display:none;align-items:center;gap:6px;flex-wrap:wrap">
+        <input id="acctUser" placeholder="username" autocomplete="username" style="width:110px"/>
+        <input id="acctPw" type="password" placeholder="password" autocomplete="current-password" style="width:110px"/>
+        <button class="btn sec" id="acctLogin" style="padding:5px 10px">Sign in</button>
+        <button class="btn sec" id="acctReg" style="padding:5px 10px" title="Create an account — your games and training progress sync across devices">Register</button>
+      </span>
+    </div>
     <nav class="tabs" id="tabs">
       <button data-view="import" class="active">Import</button>
       <button data-view="review">Review</button>
@@ -360,7 +372,7 @@ function cpToPawns(cp){ if(Math.abs(cp)>=MATE-1000){const m=MATE-Math.abs(cp);re
 let store = load();
 function load(){ try{return JSON.parse(localStorage.getItem(STORE_KEY))||fresh();}catch(e){return fresh();} }
 function fresh(){ return { games:[], puzzles:[], meta:{}, students:[] }; }
-function save(){ localStorage.setItem(STORE_KEY, JSON.stringify(store)); }
+function save(){ localStorage.setItem(STORE_KEY, JSON.stringify(store)); scheduleCloudSave(); }
 if(!store.students) store.students=[];
 // studentId null === "you". Every list-producing view scopes to one profile.
 function gamesFor(sid){ sid=sid||null; return store.games.filter(g=>(g.studentId||null)===sid); }
@@ -756,9 +768,73 @@ function commentaryFor(a, game){
 
 /* ========================= LLM commentary (optional backend) */
 let LLM = { enabled:false, model:null };
+/* ========================= accounts & cloud sync ============ */
+// Signed in: the store syncs to the server per account (multi-device). Signed out: local-only, as always.
+const AUTH={available:false,user:null};
+let _cloudTimer=null,_cloudBusy=false;
+function acctRender(){
+  const bar=$('#acctBar'); if(!bar) return;
+  bar.style.display=AUTH.available?'flex':'none';
+  $('#acctIn').style.display=AUTH.user?'flex':'none';
+  $('#acctForms').style.display=AUTH.user?'none':'flex';
+  if(AUTH.user) $('#acctName').textContent=AUTH.user;
+}
+function syncDot(msg){ const d=$('#syncDot'); if(d) d.textContent=msg||''; }
+function rerenderAll(){ renderGames(); renderTrainMeta(); renderReviewPicker(); setSoundBtn(); applyEngineVis(); }
+// union by id — nothing from either side is ever dropped
+function mergeStores(local, remote){
+  if(!remote) return local;
+  if(!local || !(local.games||[]).length) return remote;
+  const uni=(a,b)=>{const m=new Map(); (a||[]).forEach(x=>m.set(x.id,x)); (b||[]).forEach(x=>{ if(!m.has(x.id)) m.set(x.id,x); }); return [...m.values()];};
+  return { games:uni(remote.games,local.games), puzzles:uni(remote.puzzles,local.puzzles),
+           students:uni(remote.students,local.students), meta:Object.assign({},local.meta,remote.meta) };
+}
+async function adoptCloud(){
+  try{
+    syncDot('syncing…');
+    const r=await fetch('/api/store'); if(!r.ok){ syncDot('sync failed'); return; }
+    const j=await r.json();
+    store=mergeStores(store, j.store);
+    if(!store.students) store.students=[];
+    localStorage.setItem(STORE_KEY, JSON.stringify(store));
+    scheduleCloudSave();                                // push the merged result back up
+    rerenderAll(); syncDot('✓ synced');
+  }catch(e){ syncDot('offline'); }
+}
+function scheduleCloudSave(){
+  if(!AUTH.user) return;
+  clearTimeout(_cloudTimer);
+  _cloudTimer=setTimeout(async()=>{
+    if(_cloudBusy){ scheduleCloudSave(); return; }
+    _cloudBusy=true; syncDot('saving…');
+    try{ const r=await fetch('/api/store',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify(store)}); syncDot(r.ok?'✓ synced':'sync failed'); }
+    catch(e){ syncDot('offline'); }
+    _cloudBusy=false;
+  },1500);
+}
+async function acctSubmit(pathname){
+  const u=$('#acctUser').value.trim(), pw=$('#acctPw').value;
+  if(!u||!pw) return toast('Enter a username and a password');
+  try{
+    const r=await fetch(pathname,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({username:u,password:pw})});
+    const j=await r.json();
+    if(!r.ok) return toast(j.error||('HTTP '+r.status));
+    AUTH.user=j.user; $('#acctPw').value=''; acctRender();
+    toast((pathname==='/api/register'?'Account created — ':'')+'signed in as '+j.user);
+    await adoptCloud();
+  }catch(e){ toast('Network error: '+e.message); }
+}
+$('#acctLogin').onclick=()=>acctSubmit('/api/login');
+$('#acctReg').onclick=()=>acctSubmit('/api/register');
+$('#acctPw').addEventListener('keydown',e=>{ if(e.key==='Enter') acctSubmit('/api/login'); });
+$('#acctOut').onclick=async()=>{ try{ await fetch('/api/logout',{method:'POST'}); }catch(e){} AUTH.user=null; acctRender(); syncDot(''); toast('Signed out — this browser keeps its local copy'); };
+
 async function checkLLM(){
-  try{ const r=await fetch('/api/health'); if(r.ok){ const j=await r.json(); LLM.enabled=!!j.llm; LLM.model=j.model||null; } }catch(e){ LLM.enabled=false; }
+  try{ const r=await fetch('/api/health'); if(r.ok){ const j=await r.json(); LLM.enabled=!!j.llm; LLM.model=j.model||null; AUTH.available=!!j.auth; AUTH.user=j.user||null; } }
+  catch(e){ LLM.enabled=false; AUTH.available=false; AUTH.user=null; }
   const sw=$('#sheetWrap'); if(sw) sw.style.display=LLM.enabled?'':'none';
+  acctRender();
+  if(AUTH.user) await adoptCloud();                     // session cookie survived — pull the account's data
 }
 // Stream text over SSE from `url`; onDelta(fullTextSoFar) fires per chunk. Returns final text.
 async function streamSSE(url, payload, onDelta){

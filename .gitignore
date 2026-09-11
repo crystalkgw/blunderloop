@@ -4,3 +4,7 @@ node_modules/
 
 # local API key (never commit)
 .anthropic_key
+
+# user accounts & sessions (never commit)
+.users/
+.session_secret

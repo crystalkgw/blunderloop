@@ -5,9 +5,10 @@
 
 import http from 'node:http';
 import { readFile, writeFile } from 'node:fs/promises';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { scryptSync, randomBytes, timingSafeEqual, createHmac } from 'node:crypto';
 import { Chess } from './lib/chess.js';   // validate transcribed scoresheet moves on a real board
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -24,6 +25,49 @@ if (!process.env.ANTHROPIC_API_KEY) {
 }
 const HAS_KEY = !!process.env.ANTHROPIC_API_KEY;
 const CACHE_FILE = path.join(__dirname, '.commentary-cache.json');
+
+/* ---- accounts: scrypt-hashed passwords, HMAC-signed session cookies, JSON storage ---- */
+const USERS_DIR = path.join(__dirname, '.users');
+const USERS_FILE = path.join(USERS_DIR, 'users.json');
+const STORES_DIR = path.join(USERS_DIR, 'stores');
+mkdirSync(STORES_DIR, { recursive: true });
+let users = {};
+try { if (existsSync(USERS_FILE)) users = JSON.parse(readFileSync(USERS_FILE, 'utf8')); } catch { users = {}; }
+const saveUsers = () => writeFileSync(USERS_FILE, JSON.stringify(users, null, 1));
+// session-signing secret persists across restarts (gitignored)
+const SECRET_FILE = path.join(__dirname, '.session_secret');
+if (!existsSync(SECRET_FILE)) writeFileSync(SECRET_FILE, randomBytes(32).toString('hex'));
+const SECRET = readFileSync(SECRET_FILE, 'utf8').trim();
+
+const hashPw = (pw, salt) => scryptSync(pw, salt, 64).toString('hex');
+const sign = s => createHmac('sha256', SECRET).update(s).digest('hex');
+function makeToken(u){ const exp = Date.now() + 30*24*3600*1000; const body = `${u}.${exp}`; return `${body}.${sign(body)}`; }
+function verifyToken(tok){
+  if (!tok) return null;
+  const i = tok.lastIndexOf('.'); if (i < 0) return null;
+  const body = tok.slice(0, i), mac = tok.slice(i+1);
+  const good = sign(body);
+  try { if (!timingSafeEqual(Buffer.from(mac), Buffer.from(good))) return null; } catch { return null; }
+  const j = body.lastIndexOf('.'); const u = body.slice(0, j); const exp = +body.slice(j+1);
+  if (!u || !(exp > Date.now()) || !users[u]) return null;
+  return u;
+}
+function sessionUser(req){
+  const m = /(?:^|;\s*)bl_sess=([^;]+)/.exec(req.headers.cookie || '');
+  return verifyToken(m ? decodeURIComponent(m[1]) : null);
+}
+const setSession = (res, tok) => res.setHeader('set-cookie',
+  tok ? `bl_sess=${encodeURIComponent(tok)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${30*24*3600}`
+      : 'bl_sess=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0');
+const storeFileOf = u => path.join(STORES_DIR, u.toLowerCase() + '.json');
+// crude per-IP throttle on auth endpoints
+const authHits = new Map();
+function authLimited(ip){
+  const now = Date.now(); const h = authHits.get(ip) || { n: 0, reset: now + 600000 };
+  if (now > h.reset) { h.n = 0; h.reset = now + 600000; }
+  h.n++; authHits.set(ip, h);
+  return h.n > 20;
+}
 
 /* ---- persistent commentary cache, keyed by (fen | playedUci | model) ---- */
 let cache = {};
@@ -311,7 +355,53 @@ const server = http.createServer(async (req, res) => {
 
     if (url.pathname === '/api/health') {
       res.writeHead(200, { 'content-type': 'application/json' });
-      return res.end(JSON.stringify({ llm: HAS_KEY, model: MODEL }));
+      return res.end(JSON.stringify({ llm: HAS_KEY, model: MODEL, auth: true, user: sessionUser(req) }));
+    }
+
+    /* ---- accounts & per-user cloud store ---- */
+    const json = (code, obj) => { res.writeHead(code, {'content-type':'application/json'}); res.end(JSON.stringify(obj)); };
+    if (url.pathname === '/api/register' && req.method === 'POST') {
+      if (authLimited(req.socket.remoteAddress)) return json(429, { error: 'Too many attempts — wait a few minutes.' });
+      let b; try { b = JSON.parse(await readBody(req)); } catch { return json(400, { error: 'bad json' }); }
+      const u = String(b?.username || '').trim();
+      const pw = String(b?.password || '');
+      if (!/^[a-zA-Z0-9_-]{3,20}$/.test(u)) return json(400, { error: 'Username: 3–20 letters, digits, - or _' });
+      if (pw.length < 8) return json(400, { error: 'Password must be at least 8 characters.' });
+      const key = u.toLowerCase();
+      if (users[key]) return json(409, { error: 'That username is taken.' });
+      const salt = randomBytes(16).toString('hex');
+      users[key] = { name: u, salt, hash: hashPw(pw, salt), created: Date.now() };
+      saveUsers();
+      setSession(res, makeToken(key));
+      return json(200, { user: key });
+    }
+    if (url.pathname === '/api/login' && req.method === 'POST') {
+      if (authLimited(req.socket.remoteAddress)) return json(429, { error: 'Too many attempts — wait a few minutes.' });
+      let b; try { b = JSON.parse(await readBody(req)); } catch { return json(400, { error: 'bad json' }); }
+      const key = String(b?.username || '').trim().toLowerCase();
+      const rec = users[key];
+      const candidate = rec ? hashPw(String(b?.password || ''), rec.salt) : hashPw('x', '00');
+      const ok = rec && timingSafeEqual(Buffer.from(candidate), Buffer.from(rec ? rec.hash : candidate));
+      if (!ok) return json(401, { error: 'Wrong username or password.' });
+      setSession(res, makeToken(key));
+      return json(200, { user: key });
+    }
+    if (url.pathname === '/api/logout' && req.method === 'POST') { setSession(res, null); return json(200, { ok: true }); }
+    if (url.pathname === '/api/me') return json(200, { user: sessionUser(req) });
+    if (url.pathname === '/api/store') {
+      const u = sessionUser(req);
+      if (!u) return json(401, { error: 'not signed in' });
+      const f = storeFileOf(u);
+      if (req.method === 'GET') {
+        try { return json(200, { store: existsSync(f) ? JSON.parse(readFileSync(f, 'utf8')) : null }); }
+        catch { return json(200, { store: null }); }
+      }
+      if (req.method === 'PUT') {
+        let body; try { body = await readBody(req, 15e6); } catch { return json(413, { error: 'store too large' }); }
+        try { JSON.parse(body); } catch { return json(400, { error: 'bad json' }); }
+        await writeFile(f, body);
+        return json(200, { ok: true, bytes: body.length });
+      }
     }
 
     if (url.pathname === '/api/commentary' && req.method === 'POST') {
@@ -343,7 +433,9 @@ const server = http.createServer(async (req, res) => {
     if (p === '/' ) p = '/index.html';
     const safe = path.normalize(p).replace(/^(\.\.[/\\])+/, '');
     const file = path.join(__dirname, safe);
-    if (!file.startsWith(__dirname) || safe.includes('.commentary-cache') || safe === '/server.mjs') { res.writeHead(404); return res.end('not found'); }
+    if (!file.startsWith(__dirname) || safe === '/server.mjs' ||
+        safe.includes('.commentary-cache') || safe.includes('.anthropic_key') ||
+        safe.includes('.session_secret') || safe.includes('.users')) { res.writeHead(404); return res.end('not found'); }
     try {
       const buf = await readFile(file);
       res.writeHead(200, { 'content-type': MIME[path.extname(file)] || 'application/octet-stream' });
@@ -354,7 +446,9 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, '127.0.0.1', () => {
+// default: this machine only. Set HOST=0.0.0.0 to open it to your home wifi
+// (so a tablet can use http://<this-mac's-LAN-IP>:8777 with the same accounts).
+server.listen(PORT, process.env.HOST || '127.0.0.1', () => {
   console.log(`\nBlunderloop → http://localhost:${PORT}/index.html`);
   console.log(HAS_KEY ? `AI commentary: ON  (model: ${MODEL})` : `AI commentary: OFF  (set ANTHROPIC_API_KEY to enable)`);
   console.log('Ctrl-C to stop.\n');
