@@ -145,7 +145,7 @@
     <div class="tag">Train on the mistakes you actually make.</div>
     <div id="acctBar" style="display:none;margin-left:auto;align-items:center;gap:8px;font-size:13px">
       <span id="acctIn" style="display:none;align-items:center;gap:8px">
-        <span>👤 <b id="acctName"></b></span><span id="syncDot" class="muted"></span>
+        <span>👤 <b id="acctName"></b></span><span id="acctPlan" class="muted"></span><span id="syncDot" class="muted"></span>
         <button class="btn sec" id="acctOut" style="padding:5px 10px">Sign out</button>
       </span>
       <span id="acctForms" style="display:none;align-items:center;gap:6px;flex-wrap:wrap">
@@ -778,6 +778,8 @@ function acctRender(){
   $('#acctIn').style.display=AUTH.user?'flex':'none';
   $('#acctForms').style.display=AUTH.user?'none':'flex';
   if(AUTH.user) $('#acctName').textContent=AUTH.user;
+  const plan=$('#acctPlan');
+  if(plan) plan.textContent = (AUTH.user && AUTH.sub) ? (AUTH.sub.subscribed ? '\u2728 subscribed' : `AI: ${AUTH.sub.aiUsed}/${AUTH.sub.aiFree} free games`) : '';
 }
 function syncDot(msg){ const d=$('#syncDot'); if(d) d.textContent=msg||''; }
 function rerenderAll(){ renderGames(); renderTrainMeta(); renderReviewPicker(); setSoundBtn(); applyEngineVis(); }
@@ -830,8 +832,8 @@ $('#acctPw').addEventListener('keydown',e=>{ if(e.key==='Enter') acctSubmit('/ap
 $('#acctOut').onclick=async()=>{ try{ await fetch('/api/logout',{method:'POST'}); }catch(e){} AUTH.user=null; acctRender(); syncDot(''); toast('Signed out — this browser keeps its local copy'); };
 
 async function checkLLM(){
-  try{ const r=await fetch('/api/health'); if(r.ok){ const j=await r.json(); LLM.enabled=!!j.llm; LLM.model=j.model||null; AUTH.available=!!j.auth; AUTH.user=j.user||null; } }
-  catch(e){ LLM.enabled=false; AUTH.available=false; AUTH.user=null; }
+  try{ const r=await fetch('/api/health'); if(r.ok){ const j=await r.json(); LLM.enabled=!!j.llm; LLM.model=j.model||null; AUTH.available=!!j.auth; AUTH.user=j.user||null; AUTH.sub=j.sub||null; } }
+  catch(e){ LLM.enabled=false; AUTH.available=false; AUTH.user=null; AUTH.sub=null; }
   const sw=$('#sheetWrap'); if(sw) sw.style.display=LLM.enabled?'':'none';
   acctRender();
   if(AUTH.user) await adoptCloud();                     // session cookie survived — pull the account's data
@@ -839,7 +841,7 @@ async function checkLLM(){
 // Stream text over SSE from `url`; onDelta(fullTextSoFar) fires per chunk. Returns final text.
 async function streamSSE(url, payload, onDelta){
   const r=await fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});
-  if(!r.ok){ const j=await r.json().catch(()=>({})); throw new Error(j.error||('HTTP '+r.status)); }
+  if(!r.ok){ const j=await r.json().catch(()=>({})); const err=new Error(j.error||('HTTP '+r.status)); if(j.upgrade) err.upgradeUrl=j.upgradeUrl||''; throw err; }
   const reader=r.body.getReader(); const dec=new TextDecoder();
   let buf='', full='';
   while(true){
@@ -879,18 +881,24 @@ function attachAI(container, obj, buildPayload){
   if(obj.llm && obj.llmVer===COMMENTARY_VER){ showCard(obj.llm,true); container.appendChild(wrap); return; }
   const btn=el('button','btn sec'); btn.textContent='✨ Explain with AI';
   btn.onclick=async()=>{
+    if(AUTH.available && !AUTH.user){ toast('Create a free account (top right) to use the AI coach \u2014 first 5 games free'); return; }
     showCard(''); const card=wrap.querySelector('.ai'); card.classList.add('streaming');
     const tEl=wrap.querySelector('.aitext');
     try{
       const full=await streamSSE('/api/commentary', buildPayload(), t=>{ tEl.textContent=t; });
       card.classList.remove('streaming'); tEl.innerHTML=coachHTML(full); obj.llm=full; obj.llmVer=COMMENTARY_VER; save();
-    }catch(e){ wrap.innerHTML=''; wrap.appendChild(btn); toast('AI: '+e.message); }
+    }catch(e){
+      if(e.upgradeUrl!==undefined){
+        wrap.innerHTML=`<div class="ai"><span class="ailead">\u2728 Coach</span> <span class="aitext">${String(e.message).replace(/</g,'&lt;')} ${e.upgradeUrl?`<a href="${e.upgradeUrl}" target="_blank" rel="noopener"><b>Subscribe \u2192</b></a>`:''}</span></div>`;
+      } else { wrap.innerHTML=''; wrap.appendChild(btn); toast('AI: '+e.message); }
+    }
   };
   wrap.appendChild(btn); container.appendChild(wrap);
 }
 function aiPayloadForMove(a, opp){
   const phase=phaseOf(a.ply);
   return { fen:a.fenBefore, mover:a.mover, playedSan:a.san, playedUci:moveUci(a.fenBefore,a.san),
+    gameId: rv.game ? rv.game.id : null,
     kind:mistakeKind(a), phase, tag:a.tag,
     openingName:(phase==='opening' && rv.book)?rv.book.name:null,
     // opening: no engine main line — the coach teaches principles, not lines to memorize
@@ -904,6 +912,7 @@ function aiPayloadForMove(a, opp){
 function aiPayloadForPuzzle(p){ const mover=new Chess(p.fen).turn(); const phase=phaseOf(p.ply);
   const kind=mistakeKind({wasMateAfter:p.mateAfter, refutationLineSan:p.refutationLineSan, lossCp:p.lossCp});
   return { fen:p.fen, mover, playedSan:p.playedSan, playedUci:moveUci(p.fen,p.playedSan),
+    gameId: p.gameId,
     kind, phase, tag:'blunder',
     bestSan:p.correctSan, bestUci:p.correctUci, bestLineSan:(phase==='opening'?null:p.bestLineSan), refutationLineSan:p.refutationLineSan||null, lossCp:p.lossCp, mateAfter:p.mateAfter,
     oppLastSan: p.oppLastSan||null, oppBestSan: p.oppBestSan||null, oppLossPawns: p.oppLossPawns||null }; }
@@ -1202,6 +1211,7 @@ $('#sheetFiles').onchange=e=>{ sheetPicked=[...e.target.files]; sheetShow(); };
   });
 }
 $('#sheetBtn').onclick=async()=>{
+  if(AUTH.available && !AUTH.user){ toast('Create a free account (top right) to use scoresheet reading \u2014 first 5 games free'); return; }
   const files=sheetPicked; if(!files.length) return;
   const st=$('#sheetStatus'), btn=$('#sheetBtn'); btn.disabled=true;
   try{
@@ -1210,7 +1220,7 @@ $('#sheetBtn').onclick=async()=>{
     st.textContent='🤖 Reading the handwriting… (10–30 s)';
     const r=await fetch('/api/scoresheet',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({images})});
     const j=await r.json();
-    if(!r.ok) throw new Error(j.error||('HTTP '+r.status));
+    if(!r.ok){ const err=new Error(j.error||('HTTP '+r.status)); if(j.upgrade) err.upgradeUrl=j.upgradeUrl||''; throw err; }
     $('#pgnText').value=j.pgn;
     $('#pgnColor').value=$('#sheetColor').value;
     if(j.fullyValid && !(j.warnings&&j.warnings.length)){
@@ -1220,7 +1230,7 @@ $('#sheetBtn').onclick=async()=>{
       st.innerHTML=`Read ${j.moves} verified half-moves into the PGN box — <b>please review, then click Add PGN</b>.`
         +(j.warnings&&j.warnings.length?`<br>⚠ ${j.warnings.map(w=>String(w).replace(/</g,'&lt;')).join('<br>⚠ ')}`:'');
     }
-  }catch(e){ st.textContent='✗ '+e.message; }
+  }catch(e){ st.innerHTML='✗ '+String(e.message).replace(/</g,'&lt;')+(e.upgradeUrl?` <a href="${e.upgradeUrl}" target="_blank" rel="noopener"><b>Subscribe →</b></a>`:''); }
   btn.disabled=false;
 };
 $('#demoBtn').onclick=()=>{ $('#pgnColor').value='white'; $('#pgnText').value=DEMO_PGN; ingest(splitPgns(DEMO_PGN).map(p=>gameFromPgn(p,'manual','white')),'Demo',null); };
@@ -1665,7 +1675,7 @@ function renderCoachSummary(container, sid, s){
     show(''); const card=container.querySelector('.ai'); card.classList.add('streaming'); const tEl=container.querySelector('.aitext');
     const blunders=puzzlesFor(sid).slice().sort((a,b)=>b.lossCp-a.lossCp).slice(0,12)
       .map(p=>({playedSan:p.playedSan,correctSan:p.correctSan,lossCp:p.lossCp,phase:phaseOf(p.ply)}));
-    const payload={ name:studentName(sid), rate:s.rate, blunders,
+    const payload={ sid, name:studentName(sid), rate:s.rate, blunders,
       phases:{opening:s.phases.opening.b, middlegame:s.phases.middlegame.b, endgame:s.phases.endgame.b} };
     try{ const full=await streamSSE('/api/coach-summary', payload, t=>{tEl.textContent=t;}); card.classList.remove('streaming'); tEl.textContent=full; student.summary=full; save(); }
     catch(e){ container.innerHTML=''; container.appendChild(btn); toast('AI: '+e.message); }

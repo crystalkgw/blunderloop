@@ -1,0 +1,36 @@
+# Deploy Blunderloop's full backend (accounts + AI coach + subscriptions) to Render.
+#
+# One-time setup:
+#   1. Create a free account at https://render.com (sign in with GitHub).
+#   2. New + -> Blueprint -> pick the crystalkgw/blunderloop repo -> Apply.
+#   3. In the service's Environment tab, fill in the three secret vars below.
+#   4. Your public app (with registration + AI) lives at https://<service>.onrender.com
+#
+# Note: the persistent disk (which keeps user accounts across deploys) requires
+# the paid Starter instance (~$7/mo). Without a disk, every deploy wipes accounts.
+
+services:
+  - type: web
+    name: blunderloop
+    runtime: node
+    plan: starter
+    buildCommand: npm install
+    startCommand: node server.mjs
+    healthCheckPath: /api/health
+    disk:
+      name: blunderloop-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: DATA_DIR
+        value: /data
+      - key: HOST
+        value: 0.0.0.0
+      - key: ANTHROPIC_MODEL
+        value: claude-opus-4-8
+      - key: ANTHROPIC_API_KEY
+        sync: false   # paste in the dashboard — never in git
+      - key: ADMIN_USERS
+        sync: false   # your username(s), comma-separated: unlimited AI + admin endpoints
+      - key: SUBSCRIBE_URL
+        sync: false   # your Stripe Payment Link — shown on the upgrade prompt

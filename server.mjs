@@ -24,10 +24,43 @@ if (!process.env.ANTHROPIC_API_KEY) {
   } catch {}
 }
 const HAS_KEY = !!process.env.ANTHROPIC_API_KEY;
-const CACHE_FILE = path.join(__dirname, '.commentary-cache.json');
+// DATA_DIR: where all mutable state lives. Locally: the project folder. On a host
+// (Render/Railway): the persistent disk mount, e.g. DATA_DIR=/data.
+const DATA_DIR = process.env.DATA_DIR || __dirname;
+mkdirSync(DATA_DIR, { recursive: true });
+const CACHE_FILE = path.join(DATA_DIR, '.commentary-cache.json');
+
+/* ---- subscription / entitlements ---- */
+const FREE_AI_GAMES = parseInt(process.env.FREE_AI_GAMES || '5', 10);
+const AI_DAILY_CAP  = parseInt(process.env.AI_DAILY_CAP  || '300', 10);
+const SUBSCRIBE_URL = process.env.SUBSCRIBE_URL || '';   // e.g. a Stripe Payment Link
+const ADMIN_USERS = (process.env.ADMIN_USERS || '').toLowerCase().split(',').map(s=>s.trim()).filter(Boolean);
+const isSubscribed = key => !!(users[key] && users[key].subscribed) || ADMIN_USERS.includes(key);
+// gate one AI call: signed-in, daily cap, and (unless subscribed) a budget of
+// FREE_AI_GAMES distinct games. creditKey identifies the game being coached.
+// a server bound to 127.0.0.1 is the owner's private machine — no gating there.
+// Any public binding (HOST=0.0.0.0, e.g. LAN mode or a cloud host) enforces the gate.
+const PRIVATE_SERVER = (process.env.HOST || '127.0.0.1') === '127.0.0.1';
+function aiGate(key, creditKey){
+  if (PRIVATE_SERVER) return { ok:true };
+  const rec = users[key];
+  if (!rec) return { ok:false, code:401, error:'Sign in (free) to use the AI coach.' };
+  const today = new Date().toISOString().slice(0,10);
+  if (!rec.aiDay || rec.aiDay.date !== today) rec.aiDay = { date: today, n: 0 };
+  if (rec.aiDay.n >= AI_DAILY_CAP) return { ok:false, code:429, error:'Daily AI limit reached — try again tomorrow.' };
+  rec.aiGames = rec.aiGames || [];
+  if (!isSubscribed(key) && !rec.aiGames.includes(creditKey)){
+    if (rec.aiGames.length >= FREE_AI_GAMES)
+      return { ok:false, code:402, upgrade:true, upgradeUrl:SUBSCRIBE_URL,
+        error:`Your ${FREE_AI_GAMES} free AI-coached games are used up — subscribe to keep the coach.` };
+    rec.aiGames.push(creditKey);
+  }
+  rec.aiDay.n++; saveUsers();
+  return { ok:true };
+}
 
 /* ---- accounts: scrypt-hashed passwords, HMAC-signed session cookies, JSON storage ---- */
-const USERS_DIR = path.join(__dirname, '.users');
+const USERS_DIR = path.join(DATA_DIR, '.users');
 const USERS_FILE = path.join(USERS_DIR, 'users.json');
 const STORES_DIR = path.join(USERS_DIR, 'stores');
 mkdirSync(STORES_DIR, { recursive: true });
@@ -35,7 +68,7 @@ let users = {};
 try { if (existsSync(USERS_FILE)) users = JSON.parse(readFileSync(USERS_FILE, 'utf8')); } catch { users = {}; }
 const saveUsers = () => writeFileSync(USERS_FILE, JSON.stringify(users, null, 1));
 // session-signing secret persists across restarts (gitignored)
-const SECRET_FILE = path.join(__dirname, '.session_secret');
+const SECRET_FILE = path.join(DATA_DIR, '.session_secret');
 if (!existsSync(SECRET_FILE)) writeFileSync(SECRET_FILE, randomBytes(32).toString('hex'));
 const SECRET = readFileSync(SECRET_FILE, 'utf8').trim();
 
@@ -56,9 +89,12 @@ function sessionUser(req){
   const m = /(?:^|;\s*)bl_sess=([^;]+)/.exec(req.headers.cookie || '');
   return verifyToken(m ? decodeURIComponent(m[1]) : null);
 }
-const setSession = (res, tok) => res.setHeader('set-cookie',
-  tok ? `bl_sess=${encodeURIComponent(tok)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${30*24*3600}`
-      : 'bl_sess=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0');
+const setSession = (req, res, tok) => {
+  const sec = (req.headers['x-forwarded-proto']||'').includes('https') ? '; Secure' : '';
+  res.setHeader('set-cookie',
+    tok ? `bl_sess=${encodeURIComponent(tok)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${30*24*3600}${sec}`
+        : `bl_sess=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${sec}`);
+};
 const storeFileOf = u => path.join(STORES_DIR, u.toLowerCase() + '.json');
 // crude per-IP throttle on auth endpoints
 const authHits = new Map();
@@ -354,8 +390,10 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://localhost:${PORT}`);
 
     if (url.pathname === '/api/health') {
+      const hu = sessionUser(req);
       res.writeHead(200, { 'content-type': 'application/json' });
-      return res.end(JSON.stringify({ llm: HAS_KEY, model: MODEL, auth: true, user: sessionUser(req) }));
+      return res.end(JSON.stringify({ llm: HAS_KEY, model: MODEL, auth: true, user: hu,
+        sub: hu ? { subscribed: isSubscribed(hu), aiUsed: (users[hu].aiGames||[]).length, aiFree: FREE_AI_GAMES, upgradeUrl: SUBSCRIBE_URL } : null }));
     }
 
     /* ---- accounts & per-user cloud store ---- */
@@ -372,7 +410,7 @@ const server = http.createServer(async (req, res) => {
       const salt = randomBytes(16).toString('hex');
       users[key] = { name: u, salt, hash: hashPw(pw, salt), created: Date.now() };
       saveUsers();
-      setSession(res, makeToken(key));
+      setSession(req, res, makeToken(key));
       return json(200, { user: key });
     }
     if (url.pathname === '/api/login' && req.method === 'POST') {
@@ -383,10 +421,10 @@ const server = http.createServer(async (req, res) => {
       const candidate = rec ? hashPw(String(b?.password || ''), rec.salt) : hashPw('x', '00');
       const ok = rec && timingSafeEqual(Buffer.from(candidate), Buffer.from(rec ? rec.hash : candidate));
       if (!ok) return json(401, { error: 'Wrong username or password.' });
-      setSession(res, makeToken(key));
+      setSession(req, res, makeToken(key));
       return json(200, { user: key });
     }
-    if (url.pathname === '/api/logout' && req.method === 'POST') { setSession(res, null); return json(200, { ok: true }); }
+    if (url.pathname === '/api/logout' && req.method === 'POST') { setSession(req, res, null); return json(200, { ok: true }); }
     if (url.pathname === '/api/me') return json(200, { user: sessionUser(req) });
     if (url.pathname === '/api/store') {
       const u = sessionUser(req);
@@ -404,11 +442,29 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
+    /* ---- admin: manage subscriptions (users listed in ADMIN_USERS env) ---- */
+    if (url.pathname.startsWith('/api/admin/')) {
+      const au = sessionUser(req);
+      if (!au || !ADMIN_USERS.includes(au)) return json(403, { error: 'admin only' });
+      if (url.pathname === '/api/admin/users')
+        return json(200, { users: Object.entries(users).map(([k,v])=>({ username:k, created:new Date(v.created).toISOString().slice(0,10), subscribed:isSubscribed(k), aiGamesUsed:(v.aiGames||[]).length })) });
+      if (url.pathname === '/api/admin/subscribe' && req.method === 'POST') {
+        let b; try { b = JSON.parse(await readBody(req)); } catch { return json(400, { error: 'bad json' }); }
+        const key = String(b?.username || '').toLowerCase();
+        if (!users[key]) return json(404, { error: 'no such user' });
+        users[key].subscribed = !!b.subscribed; saveUsers();
+        return json(200, { username: key, subscribed: users[key].subscribed });
+      }
+      return json(404, { error: 'unknown admin endpoint' });
+    }
+
     if (url.pathname === '/api/commentary' && req.method === 'POST') {
       if (!HAS_KEY) { res.writeHead(503, {'content-type':'application/json'}); return res.end(JSON.stringify({ error: 'No ANTHROPIC_API_KEY configured on the server.' })); }
       let b;
       try { b = JSON.parse(await readBody(req)); } catch { res.writeHead(400); return res.end('bad json'); }
       if (!b || !b.fen || !b.bestSan || !b.playedSan) { res.writeHead(400, {'content-type':'application/json'}); return res.end(JSON.stringify({ error: 'missing fen/bestSan/playedSan' })); }
+      const g1 = aiGate(sessionUser(req), b.gameId ? String(b.gameId) : 'misc');
+      if (!g1.ok) return json(g1.code, { error: g1.error, upgrade: !!g1.upgrade, upgradeUrl: g1.upgradeUrl || '' });
       return streamCommentary(res, b);
     }
 
@@ -417,6 +473,8 @@ const server = http.createServer(async (req, res) => {
       let b; try { b = JSON.parse(await readBody(req, 30e6)); } catch { res.writeHead(400, {'content-type':'application/json'}); return res.end(JSON.stringify({ error:'bad json (photos too large?)' })); }
       if (!b || !Array.isArray(b.images) || !b.images.length) { res.writeHead(400, {'content-type':'application/json'}); return res.end(JSON.stringify({ error:'missing images' })); }
       if (b.images.length > 4) { res.writeHead(400, {'content-type':'application/json'}); return res.end(JSON.stringify({ error:'max 4 photos per game' })); }
+      const g2 = aiGate(sessionUser(req), 'sheet:' + hash(String(b.images[0].data||'').slice(0, 4096)));
+      if (!g2.ok) return json(g2.code, { error: g2.error, upgrade: !!g2.upgrade, upgradeUrl: g2.upgradeUrl || '' });
       try { return await handleScoresheet(res, b); }
       catch (e) { res.writeHead(500, {'content-type':'application/json'}); return res.end(JSON.stringify({ error:'Scoresheet read failed: ' + (e?.message || String(e)) })); }
     }
@@ -425,6 +483,8 @@ const server = http.createServer(async (req, res) => {
       if (!HAS_KEY) { res.writeHead(503, {'content-type':'application/json'}); return res.end(JSON.stringify({ error: 'No ANTHROPIC_API_KEY configured on the server.' })); }
       let b; try { b = JSON.parse(await readBody(req)); } catch { res.writeHead(400); return res.end('bad json'); }
       if (!b || !b.name || !Array.isArray(b.blunders)) { res.writeHead(400, {'content-type':'application/json'}); return res.end(JSON.stringify({ error: 'missing name/blunders' })); }
+      const g3 = aiGate(sessionUser(req), 'student:' + (b.sid || b.name));
+      if (!g3.ok) return json(g3.code, { error: g3.error, upgrade: !!g3.upgrade, upgradeUrl: g3.upgradeUrl || '' });
       return streamSummary(res, b);
     }
 

@@ -88,8 +88,29 @@ Data model (games / per-move analysis / puzzles) matches `PRODUCT_SPEC.md §11`.
 
 ## Deploying
 
-It's static files — drop the folder on Netlify / Vercel / GitHub Pages as-is. Stockfish 10
-needs **no** COOP/COEP headers (only NNUE 16+ builds do), so nothing special is required.
+**Static (free tier for everyone):** it's static files — GitHub Pages / Netlify / Vercel as-is
+(live at <https://crystalkgw.github.io/blunderloop/>). Stockfish 10 needs **no** COOP/COEP
+headers. On a static host the AI/login features hide themselves automatically.
+
+**Full backend (accounts + AI + subscriptions):** deploy `server.mjs` with `render.yaml`
+(Render → New + → Blueprint → this repo), then set three env vars in the dashboard:
+`ANTHROPIC_API_KEY`, `ADMIN_USERS` (your username — unlimited AI + admin endpoints), and
+`SUBSCRIBE_URL` (your Stripe Payment Link).
+
+### Accounts & the subscription model
+
+- Registration/login: scrypt-hashed passwords, signed HttpOnly session cookies, per-user
+  cloud sync of the whole library (merge-by-id, multi-device).
+- **AI free tier:** each account gets AI coaching on its first **5 games** (`FREE_AI_GAMES`);
+  re-explaining a game already coached never costs a credit. After that, AI endpoints return
+  402 with your `SUBSCRIBE_URL`, and the app shows a Subscribe link.
+- **Activating a subscriber:** after someone pays, an admin flips them on:
+  `POST /api/admin/subscribe {"username":"...","subscribed":true}` (see also
+  `GET /api/admin/users` for usage). A Stripe webhook can automate this later.
+- Everyone (subscribers too) is capped at `AI_DAILY_CAP` (300) AI calls/day.
+- A server bound to `127.0.0.1` (the default, your own machine) skips all gating;
+  any public binding (`HOST=0.0.0.0`) enforces it. For home-LAN mode, list your
+  family in `ADMIN_USERS` to keep them unlimited.
 
 ## Roadmap (post-MVP, from the spec)
 
