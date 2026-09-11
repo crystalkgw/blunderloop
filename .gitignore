@@ -1,0 +1,6 @@
+node_modules/
+.commentary-cache.json
+.DS_Store
+
+# local API key (never commit)
+.anthropic_key

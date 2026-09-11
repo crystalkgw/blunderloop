@@ -1,0 +1,13 @@
+{
+  "name": "blunderloop",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Chess loss-review trainer — static app + thin LLM-commentary backend",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.70.0"
+  }
+}
