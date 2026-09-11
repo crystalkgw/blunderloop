@@ -59,18 +59,56 @@ function aiGate(key, creditKey){
   return { ok:true };
 }
 
-/* ---- accounts: scrypt-hashed passwords, HMAC-signed session cookies, JSON storage ---- */
+/* ---- pluggable persistence: JSON files locally; Upstash Redis (free tier) on disk-less hosts.
+   Set UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN to switch. ---- */
+const REDIS_URL = process.env.UPSTASH_REDIS_REST_URL || '';
+const REDIS_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || '';
+const USE_REDIS = !!(REDIS_URL && REDIS_TOKEN);
+async function redis(cmd){
+  const r = await fetch(REDIS_URL, { method:'POST', headers:{ Authorization:`Bearer ${REDIS_TOKEN}`, 'content-type':'application/json' }, body: JSON.stringify(cmd) });
+  if (!r.ok) throw new Error('redis HTTP ' + r.status);
+  return (await r.json()).result;
+}
+// Upstash free caps each request at ~1MB, so big values (user stores) are chunked.
+const CHUNK = 800000;
+async function redisSetBig(key, str){
+  const n = Math.max(1, Math.ceil(str.length / CHUNK));
+  for (let i = 0; i < n; i++) await redis(['SET', `${key}:${i}`, str.slice(i*CHUNK, (i+1)*CHUNK)]);
+  await redis(['SET', `${key}:n`, String(n)]);
+}
+async function redisGetBig(key){
+  const n = parseInt(await redis(['GET', `${key}:n`]) || '0', 10);
+  if (!n) return null;
+  let out = ''; for (let i = 0; i < n; i++) out += (await redis(['GET', `${key}:${i}`])) || '';
+  return out;
+}
+
+/* ---- accounts: scrypt-hashed passwords, HMAC-signed session cookies ---- */
 const USERS_DIR = path.join(DATA_DIR, '.users');
 const USERS_FILE = path.join(USERS_DIR, 'users.json');
 const STORES_DIR = path.join(USERS_DIR, 'stores');
 mkdirSync(STORES_DIR, { recursive: true });
 let users = {};
-try { if (existsSync(USERS_FILE)) users = JSON.parse(readFileSync(USERS_FILE, 'utf8')); } catch { users = {}; }
-const saveUsers = () => writeFileSync(USERS_FILE, JSON.stringify(users, null, 1));
-// session-signing secret persists across restarts (gitignored)
+if (USE_REDIS) { try { users = JSON.parse(await redis(['GET','bl:users']) || '{}'); } catch { users = {}; } }
+else { try { if (existsSync(USERS_FILE)) users = JSON.parse(readFileSync(USERS_FILE, 'utf8')); } catch { users = {}; } }
+let _usersTimer = null;
+function saveUsers(){
+  if (USE_REDIS){
+    clearTimeout(_usersTimer);
+    _usersTimer = setTimeout(()=>{
+      const put = () => redis(['SET','bl:users',JSON.stringify(users)]);
+      put().catch(()=>setTimeout(()=>put().catch(e=>console.error('users save failed twice:', e.message)), 2000));
+    }, 300);
+  }
+  else writeFileSync(USERS_FILE, JSON.stringify(users, null, 1));
+}
+// session-signing secret: env var on hosts (survives redeploys), local file otherwise
 const SECRET_FILE = path.join(DATA_DIR, '.session_secret');
-if (!existsSync(SECRET_FILE)) writeFileSync(SECRET_FILE, randomBytes(32).toString('hex'));
-const SECRET = readFileSync(SECRET_FILE, 'utf8').trim();
+let SECRET = process.env.SESSION_SECRET || '';
+if (!SECRET){
+  if (!existsSync(SECRET_FILE)) writeFileSync(SECRET_FILE, randomBytes(32).toString('hex'));
+  SECRET = readFileSync(SECRET_FILE, 'utf8').trim();
+}
 
 const hashPw = (pw, salt) => scryptSync(pw, salt, 64).toString('hex');
 const sign = s => createHmac('sha256', SECRET).update(s).digest('hex');
@@ -431,13 +469,15 @@ const server = http.createServer(async (req, res) => {
       if (!u) return json(401, { error: 'not signed in' });
       const f = storeFileOf(u);
       if (req.method === 'GET') {
-        try { return json(200, { store: existsSync(f) ? JSON.parse(readFileSync(f, 'utf8')) : null }); }
-        catch { return json(200, { store: null }); }
+        try {
+          const raw = USE_REDIS ? await redisGetBig('bl:store:'+u) : (existsSync(f) ? readFileSync(f, 'utf8') : null);
+          return json(200, { store: raw ? JSON.parse(raw) : null });
+        } catch { return json(200, { store: null }); }
       }
       if (req.method === 'PUT') {
         let body; try { body = await readBody(req, 15e6); } catch { return json(413, { error: 'store too large' }); }
         try { JSON.parse(body); } catch { return json(400, { error: 'bad json' }); }
-        await writeFile(f, body);
+        if (USE_REDIS) await redisSetBig('bl:store:'+u, body); else await writeFile(f, body);
         return json(200, { ok: true, bytes: body.length });
       }
     }

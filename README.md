@@ -92,10 +92,13 @@ Data model (games / per-move analysis / puzzles) matches `PRODUCT_SPEC.md §11`.
 (live at <https://crystalkgw.github.io/blunderloop/>). Stockfish 10 needs **no** COOP/COEP
 headers. On a static host the AI/login features hide themselves automatically.
 
-**Full backend (accounts + AI + subscriptions):** deploy `server.mjs` with `render.yaml`
-(Render → New + → Blueprint → this repo), then set three env vars in the dashboard:
-`ANTHROPIC_API_KEY`, `ADMIN_USERS` (your username — unlimited AI + admin endpoints), and
-`SUBSCRIBE_URL` (your Stripe Payment Link).
+**Full backend (accounts + AI + subscriptions), $0/month:** two free accounts —
+[Upstash](https://upstash.com) (create a free Redis database; it durably holds user
+accounts, since free web hosts have no disk) and [Render](https://render.com)
+(New + → Blueprint → this repo; `render.yaml` configures the free instance). Then set the
+env vars listed in `render.yaml`: `ANTHROPIC_API_KEY`, `ADMIN_USERS`, `SUBSCRIBE_URL`,
+and the two Upstash REST credentials. Free-tier note: the server sleeps when idle, so the
+first visit after a quiet stretch takes ~30–60s to wake.
 
 ### Accounts & the subscription model
 

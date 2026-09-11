@@ -1,36 +1,39 @@
-# Deploy Blunderloop's full backend (accounts + AI coach + subscriptions) to Render.
+# Deploy Blunderloop's full backend (accounts + AI coach + subscriptions) — $0/month.
 #
-# One-time setup:
-#   1. Create a free account at https://render.com (sign in with GitHub).
-#   2. New + -> Blueprint -> pick the crystalkgw/blunderloop repo -> Apply.
-#   3. In the service's Environment tab, fill in the three secret vars below.
-#   4. Your public app (with registration + AI) lives at https://<service>.onrender.com
+# Two free accounts, both sign-in-with-GitHub:
+#   A. https://upstash.com  -> Create Redis database (free tier) -> copy the
+#      UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN from its REST API panel.
+#      (This holds user accounts durably, since free web hosts have no disk.)
+#   B. https://render.com   -> New + -> Blueprint -> pick crystalkgw/blunderloop -> Apply,
+#      then paste the five secret env vars below in the service's Environment tab.
 #
-# Note: the persistent disk (which keeps user accounts across deploys) requires
-# the paid Starter instance (~$7/mo). Without a disk, every deploy wipes accounts.
+# Your public app then lives at https://<service>.onrender.com
+#
+# Free-tier trade-off: the server sleeps after ~15 idle minutes; the first visitor
+# afterwards waits ~30-60s while it wakes. Upgrading the instance later removes that.
 
 services:
   - type: web
     name: blunderloop
     runtime: node
-    plan: starter
+    plan: free
     buildCommand: npm install
     startCommand: node server.mjs
     healthCheckPath: /api/health
-    disk:
-      name: blunderloop-data
-      mountPath: /data
-      sizeGB: 1
     envVars:
-      - key: DATA_DIR
-        value: /data
       - key: HOST
         value: 0.0.0.0
       - key: ANTHROPIC_MODEL
         value: claude-opus-4-8
+      - key: SESSION_SECRET
+        generateValue: true
       - key: ANTHROPIC_API_KEY
-        sync: false   # paste in the dashboard — never in git
+        sync: false   # your Anthropic key — paste in the dashboard, never in git
       - key: ADMIN_USERS
         sync: false   # your username(s), comma-separated: unlimited AI + admin endpoints
       - key: SUBSCRIBE_URL
         sync: false   # your Stripe Payment Link — shown on the upgrade prompt
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false   # from Upstash (step A)
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false   # from Upstash (step A)
