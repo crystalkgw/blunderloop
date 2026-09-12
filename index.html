@@ -1438,25 +1438,44 @@ function drawReview(){
   const curMv=ml.querySelector('.cur'); if(curMv) curMv.scrollIntoView({block:'nearest'});
   renderGamePuzzles(g);
 }
-// the drills born from this game, right beside its review — click a row to jump to that moment
+// the drills born from this game, right beside its review — click a row to jump to that moment;
+// plus the tactical patterns this game exposed, each linking to targeted lichess practice.
 function renderGamePuzzles(g){
   const box=$('#gamePuzzles'); if(!box) return;
   const pz=store.puzzles.filter(p=>p.gameId===g.id).sort((a,b)=>a.ply-b.ply);
-  if(!pz.length){ box.innerHTML='<div class="muted" style="font-size:13px">🧩 No drill puzzles from this game — no tactical blunders found.</div>'; return; }
-  box.innerHTML=`<h2 style="font-size:14px;margin:0 0 6px">🧩 Puzzles from this game (${pz.length})</h2>`
-    + pz.map(p=>{
-        const mvNo=Math.floor((p.ply-1)/2)+1;
-        const state=p.box>1?'✅':(p.dueAt<=todayEnd()?'🔴':'🕐');
-        return `<div class="gp-row" data-ply="${p.ply}" title="Jump to this moment in the game">
-          <span>${state}</span>
-          <span><b>move ${mvNo}</b> — you played <code class="mini">${p.playedSan}</code>, best <code class="mini">${p.correctSan}</code></span>
-          ${p.theme?`<span class="muted">${p.theme}</span>`:''}
-          <span class="muted" style="margin-left:auto">box ${p.box}</span>
-        </div>`;
-      }).join('')
-    + `<button class="btn sec" id="drillGameBtn" style="margin-top:8px">🎯 Drill these ${pz.length} now</button>`;
+  const themes={};
+  for(const a of (g.analysis||[])){
+    if(!a.isUser || !(a.tag==='blunder'||a.tag==='mistake') || playedIsBest(a)) continue;
+    const th=tacticThemeOf(a); if(th) themes[th]=(themes[th]||0)+1;
+    if(phaseOf(a.ply)==='endgame'){ const et=endgameTypeOf(a.fenBefore); themes[et]=(themes[et]||0)+1; }
+  }
+  let html='';
+  if(pz.length){
+    html+=`<h2 style="font-size:14px;margin:0 0 6px">🧩 Puzzles from this game (${pz.length})</h2>`
+      + pz.map(p=>{
+          const mvNo=Math.floor((p.ply-1)/2)+1;
+          const state=p.box>1?'✅':(p.dueAt<=todayEnd()?'🔴':'🕐');
+          return `<div class="gp-row" data-ply="${p.ply}" title="Jump to this moment in the game">
+            <span>${state}</span>
+            <span><b>move ${mvNo}</b> — you played <code class="mini">${p.playedSan}</code>, best <code class="mini">${p.correctSan}</code></span>
+            ${p.theme?`<span class="muted">${p.theme}</span>`:''}
+            <span class="muted" style="margin-left:auto">box ${p.box}</span>
+          </div>`;
+        }).join('')
+      + `<button class="btn sec" id="drillGameBtn" style="margin-top:8px">🎯 Drill these ${pz.length} now</button>`;
+  }else{
+    html+='<div class="muted" style="font-size:13px">🧩 No drill puzzles from this game — no tactical blunders found.</div>';
+  }
+  const chips=Object.entries(themes).sort((x,y)=>y[1]-x[1]).map(([th,n])=>({th,n,u:lichessPractice(th)})).filter(c=>c.u);
+  if(chips.length){
+    html+=`<h2 style="font-size:14px;margin:14px 0 6px">🎯 Practice the patterns from this game</h2>`
+      + `<div class="row" style="gap:8px;flex-wrap:wrap">`
+      + chips.map(c=>`<a class="btn sec" style="display:inline-block;text-decoration:none" href="${c.u}" target="_blank" rel="noopener" title="Endless ${c.th} puzzles on lichess">${c.th}${c.n>1?` ×${c.n}`:''} ↗</a>`).join('')
+      + `</div>`;
+  }
+  box.innerHTML=html;
   box.querySelectorAll('.gp-row').forEach(r=>r.onclick=()=>{ rv.ply=+r.dataset.ply; drawReview(); });
-  $('#drillGameBtn').onclick=()=>{ tn.seed=pz.slice(); switchView('train'); };
+  const dg=$('#drillGameBtn'); if(dg) dg.onclick=()=>{ tn.seed=pz.slice(); switchView('train'); };
 }
 $('#rvFirst').onclick=()=>{rv.ply=0;drawReview();};
 $('#rvPrev').onclick=()=>{if(rv.ply>0){rv.ply--;drawReview();}};
