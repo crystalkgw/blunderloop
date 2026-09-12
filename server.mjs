@@ -112,6 +112,22 @@ if (!SECRET){
   SECRET = readFileSync(SECRET_FILE, 'utf8').trim();
 }
 
+/* ---- "Continue with Google" (optional: set GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET) ---- */
+const GOOGLE_ID = cleanEnv(process.env.GOOGLE_CLIENT_ID);
+const GOOGLE_SECRET = cleanEnv(process.env.GOOGLE_CLIENT_SECRET);
+const HAS_GOOGLE = !!(GOOGLE_ID && GOOGLE_SECRET);
+function baseUrl(req){
+  const proto = (req.headers['x-forwarded-proto'] || 'http').split(',')[0];
+  return `${proto}://${req.headers.host}`;
+}
+function usernameFromEmail(email){
+  let base = (String(email||'player').split('@')[0]||'player').toLowerCase().replace(/[^a-z0-9_-]/g,'').slice(0,16) || 'player';
+  if (base.length < 3) base = base.padEnd(3, '0');
+  let u = base, i = 1;
+  while (users[u]) u = base.slice(0, 16) + (++i);
+  return u;
+}
+
 const hashPw = (pw, salt) => scryptSync(pw, salt, 64).toString('hex');
 // account recovery code: 12 hex chars, hashed like a password; displayed once as XXXX-XXXX-XXXX
 function mintRecovery(){
@@ -440,7 +456,7 @@ const server = http.createServer(async (req, res) => {
       let db = USE_REDIS ? 'redis' : 'file';
       if (USE_REDIS){ try { db = (await redis(['PING'])) === 'PONG' ? 'redis-ok' : 'redis-odd'; } catch(e){ db = 'redis-error: ' + e.message; } }
       res.writeHead(200, { 'content-type': 'application/json' });
-      return res.end(JSON.stringify({ llm: HAS_KEY, model: MODEL, auth: true, db, user: hu,
+      return res.end(JSON.stringify({ llm: HAS_KEY, model: MODEL, auth: true, db, google: HAS_GOOGLE, user: hu,
         sub: hu ? { subscribed: isSubscribed(hu), aiUsed: (users[hu].aiGames||[]).length, aiFree: FREE_AI_GAMES, upgradeUrl: SUBSCRIBE_URL, admin: ADMIN_USERS.includes(hu) } : null }));
     }
 
@@ -492,6 +508,7 @@ const server = http.createServer(async (req, res) => {
       const npw = String(b?.newPassword || '');
       if (npw.length < 8) return json(400, { error: 'New password must be at least 8 characters.' });
       const rec = users[au];
+      if (!rec.hash) return json(400, { error: 'This account uses Google sign-in — there is no password to change. You can set one via Forgot password with your recovery code.' });
       const cand = hashPw(String(b?.current || ''), rec.salt);
       if (!timingSafeEqual(Buffer.from(cand), Buffer.from(rec.hash))) return json(401, { error: 'Current password is wrong.' });
       rec.salt = randomBytes(16).toString('hex'); rec.hash = hashPw(npw, rec.salt);
@@ -507,11 +524,55 @@ const server = http.createServer(async (req, res) => {
       saveUsers();
       return json(200, { recoveryCode: fresh.code });
     }
+    /* ---- Continue with Google: server-side authorization-code flow, no libraries ---- */
+    if (url.pathname === '/api/google/start') {
+      if (!HAS_GOOGLE) return json(404, { error: 'Google sign-in is not configured on this server.' });
+      const ts = Date.now();
+      const state = `${ts}.${sign('g' + ts)}`;                 // stateless CSRF token, 10-min window
+      const q = new URLSearchParams({
+        client_id: GOOGLE_ID, redirect_uri: baseUrl(req) + '/api/google/callback',
+        response_type: 'code', scope: 'openid email profile', state, prompt: 'select_account',
+      });
+      res.writeHead(302, { location: 'https://accounts.google.com/o/oauth2/v2/auth?' + q });
+      return res.end();
+    }
+    if (url.pathname === '/api/google/callback') {
+      const fail = m => { res.writeHead(302, { location: '/?login_error=' + encodeURIComponent(m) }); res.end(); };
+      if (!HAS_GOOGLE) return fail('Google sign-in is not configured.');
+      const state = url.searchParams.get('state') || '';
+      const code = url.searchParams.get('code');
+      const di = state.indexOf('.'); const ts = +state.slice(0, di);
+      if (!code || !ts || Date.now() - ts > 600000 || state.slice(di + 1) !== sign('g' + ts)) return fail('Sign-in expired — please try again.');
+      try {
+        const tr = await fetch('https://oauth2.googleapis.com/token', {
+          method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ code, client_id: GOOGLE_ID, client_secret: GOOGLE_SECRET,
+            redirect_uri: baseUrl(req) + '/api/google/callback', grant_type: 'authorization_code' }),
+        });
+        const tj = await tr.json();
+        if (!tr.ok || !tj.id_token) return fail(tj.error_description || 'Google rejected the sign-in.');
+        // id_token came straight from Google over TLS; still check audience + issuer
+        const claims = JSON.parse(Buffer.from(tj.id_token.split('.')[1], 'base64url').toString('utf8'));
+        if (claims.aud !== GOOGLE_ID || !['https://accounts.google.com', 'accounts.google.com'].includes(claims.iss)) return fail('Invalid Google token.');
+        const sub = String(claims.sub);
+        let key = Object.keys(users).find(k => users[k].googleSub === sub);
+        if (!key) {
+          key = usernameFromEmail(claims.email);
+          users[key] = { name: key, created: Date.now(), email: claims.email || null,
+                         googleSub: sub, displayName: claims.name || null, salt: null, hash: null };
+          saveUsers();
+        }
+        setSession(req, res, makeToken(key));
+        res.writeHead(302, { location: '/' });
+        return res.end();
+      } catch (e) { return fail('Google sign-in failed: ' + e.message); }
+    }
     if (url.pathname === '/api/login' && req.method === 'POST') {
       if (authLimited(req.socket.remoteAddress)) return json(429, { error: 'Too many attempts — wait a few minutes.' });
       let b; try { b = JSON.parse(await readBody(req)); } catch { return json(400, { error: 'bad json' }); }
       const key = String(b?.username || '').trim().toLowerCase();
       const rec = users[key];
+      if (rec && !rec.hash) return json(401, { error: 'This account uses Google sign-in — use the "Continue with Google" button.' });
       const candidate = rec ? hashPw(String(b?.password || ''), rec.salt) : hashPw('x', '00');
       const ok = rec && timingSafeEqual(Buffer.from(candidate), Buffer.from(rec ? rec.hash : candidate));
       if (!ok) return json(401, { error: 'Wrong username or password.' });

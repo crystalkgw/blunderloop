@@ -361,6 +361,8 @@
       <label class="fld">Password</label><input id="liPw" type="password" autocomplete="current-password"/>
       <button class="btn" id="liBtn" style="margin-top:14px;width:100%">Sign in</button>
       <div class="muted" style="font-size:12px;margin-top:10px"><a href="#" id="liForgot">Forgot your password?</a></div>
+      <div class="gRow" style="display:none"><div style="display:flex;align-items:center;gap:10px;margin:14px 0 0"><hr style="flex:1;border:none;border-top:1px solid var(--line)"><span class="muted" style="font-size:12px">or</span><hr style="flex:1;border:none;border-top:1px solid var(--line)"></div>
+      <button class="btn gBtn" style="width:100%;margin-top:10px;background:#fff;border-color:#fff;color:#1f1f1f">🔵 Continue with Google</button></div>
     </div>
     <div class="authPane" id="pane-reg" style="display:none">
       <label class="fld">Username <span class="muted">(3–20 letters, digits, - or _)</span></label><input id="rgUser" autocomplete="username"/>
@@ -369,6 +371,8 @@
       <label class="fld">Repeat password</label><input id="rgPw2" type="password" autocomplete="new-password"/>
       <button class="btn" id="rgBtn" style="margin-top:14px;width:100%">Create account</button>
       <div class="muted" style="font-size:12px;margin-top:10px">Free · your games and training progress sync across devices · AI coaching on your first 5 games included.</div>
+      <div class="gRow" style="display:none"><div style="display:flex;align-items:center;gap:10px;margin:14px 0 0"><hr style="flex:1;border:none;border-top:1px solid var(--line)"><span class="muted" style="font-size:12px">or</span><hr style="flex:1;border:none;border-top:1px solid var(--line)"></div>
+      <button class="btn gBtn" style="width:100%;margin-top:10px;background:#fff;border-color:#fff;color:#1f1f1f">🔵 Continue with Google</button></div>
     </div>
     <div class="authPane" id="pane-forgot" style="display:none">
       <p class="sub" style="margin:0 0 10px">Enter the recovery code you saved when the account was created, and pick a new password.</p>
@@ -898,6 +902,9 @@ function showRecoveryCode(code, next){
   $('#codeDone').onclick=()=>{ authHide(); if(next) next(); };
 }
 async function afterSignIn(msg){ if(msg) toast(msg); await checkLLM(); }   // checkLLM re-reads health → AUTH, badge, adoptCloud
+document.querySelectorAll('.gBtn').forEach(b=>b.onclick=()=>{ location.href='/api/google/start'; });
+{ const le=new URLSearchParams(location.search).get('login_error');
+  if(le){ setTimeout(()=>toast('Google sign-in: '+le), 400); history.replaceState(null,'',location.pathname); } }
 $('#acctOpenBtn').onclick=()=>authShow('login');
 $('#acctGear').onclick=()=>{ $('#acctModalName').textContent=AUTH.user||''; authShow('acct'); };
 $('#authClose').onclick=authHide;
@@ -950,8 +957,9 @@ $('#authModal').addEventListener('keydown',e=>{
 $('#acctOut').onclick=async()=>{ try{ await fetch('/api/logout',{method:'POST'}); }catch(e){} AUTH.user=null; AUTH.sub=null; acctRender(); syncDot(''); toast('Signed out — this browser keeps its local copy'); };
 
 async function checkLLM(){
-  try{ const r=await fetch('/api/health'); if(r.ok){ const j=await r.json(); LLM.enabled=!!j.llm; LLM.model=j.model||null; AUTH.available=!!j.auth; AUTH.user=j.user||null; AUTH.sub=j.sub||null; } }
-  catch(e){ LLM.enabled=false; AUTH.available=false; AUTH.user=null; AUTH.sub=null; }
+  try{ const r=await fetch('/api/health'); if(r.ok){ const j=await r.json(); LLM.enabled=!!j.llm; LLM.model=j.model||null; AUTH.available=!!j.auth; AUTH.user=j.user||null; AUTH.sub=j.sub||null; AUTH.google=!!j.google; } }
+  catch(e){ LLM.enabled=false; AUTH.available=false; AUTH.user=null; AUTH.sub=null; AUTH.google=false; }
+  document.querySelectorAll('.gRow').forEach(el=>el.style.display=AUTH.google?'':'none');
   const sw=$('#sheetWrap'); if(sw) sw.style.display=LLM.enabled?'':'none';
   acctRender();
   if(AUTH.user) await adoptCloud();                     // session cookie survived — pull the account's data
