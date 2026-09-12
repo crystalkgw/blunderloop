@@ -435,7 +435,7 @@ const server = http.createServer(async (req, res) => {
       if (USE_REDIS){ try { db = (await redis(['PING'])) === 'PONG' ? 'redis-ok' : 'redis-odd'; } catch(e){ db = 'redis-error: ' + e.message; } }
       res.writeHead(200, { 'content-type': 'application/json' });
       return res.end(JSON.stringify({ llm: HAS_KEY, model: MODEL, auth: true, db, user: hu,
-        sub: hu ? { subscribed: isSubscribed(hu), aiUsed: (users[hu].aiGames||[]).length, aiFree: FREE_AI_GAMES, upgradeUrl: SUBSCRIBE_URL } : null }));
+        sub: hu ? { subscribed: isSubscribed(hu), aiUsed: (users[hu].aiGames||[]).length, aiFree: FREE_AI_GAMES, upgradeUrl: SUBSCRIBE_URL, admin: ADMIN_USERS.includes(hu) } : null }));
     }
 
     /* ---- accounts & per-user cloud store ---- */

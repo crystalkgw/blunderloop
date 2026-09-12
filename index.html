@@ -332,6 +332,7 @@
       <h2>Per-game breakdown</h2>
       <div id="statTable"></div>
     </div>
+    <div id="adminPanel"></div>
   </section>
 
   <!-- COACH -->
@@ -1728,6 +1729,32 @@ function renderPhaseBars(container, phases){
     container.appendChild(row);
   }
 }
+// site-owner panel (only for ADMIN_USERS accounts): see everyone, flip subscriptions on/off
+async function renderAdminPanel(){
+  const box=$('#adminPanel'); if(!box) return;
+  if(!(AUTH.user && AUTH.sub && AUTH.sub.admin)){ box.innerHTML=''; return; }
+  box.innerHTML='<div class="card"><h2 style="margin:0">⚙ Admin — subscribers</h2><div class="muted" style="font-size:13px;margin-top:6px">Loading…</div></div>';
+  try{
+    const r=await fetch('/api/admin/users'); const j=await r.json();
+    if(!r.ok) throw new Error(j.error||('HTTP '+r.status));
+    const rows=j.users.slice().sort((x,y)=>x.created<y.created?1:-1).map(u=>`<tr>
+      <td><b>${u.username}</b></td><td>${u.created}</td><td>${u.aiGamesUsed}</td>
+      <td>${u.subscribed?'✨ yes':'<span class="muted">no</span>'}</td>
+      <td style="text-align:right"><button class="btn sec" data-sub="${u.username}" data-to="${u.subscribed?0:1}">${u.subscribed?'Deactivate':'Activate ✨'}</button></td></tr>`).join('');
+    box.innerHTML=`<div class="card"><h2 style="margin:0 0 4px">⚙ Admin — subscribers</h2>
+      <p class="sub" style="margin:0 0 10px">When Stripe emails you about a payment, find the buyer's Blunderloop username in the payment details and click Activate. Deactivate if a subscription lapses.</p>
+      <table><thead><tr><th>User</th><th>Joined</th><th>AI games used</th><th>Subscribed</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+    box.querySelectorAll('[data-sub]').forEach(b=>b.onclick=async()=>{
+      b.disabled=true;
+      try{
+        const rr=await fetch('/api/admin/subscribe',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({username:b.dataset.sub, subscribed:b.dataset.to==='1'})});
+        const jj=await rr.json(); if(!rr.ok) throw new Error(jj.error||('HTTP '+rr.status));
+        toast(`${jj.username}: ${jj.subscribed?'subscribed ✨':'deactivated'}`);
+        renderAdminPanel();
+      }catch(e){ toast('Admin: '+e.message); b.disabled=false; }
+    });
+  }catch(e){ box.innerHTML=`<div class="card"><h2 style="margin:0">⚙ Admin</h2><div class="muted" style="margin-top:6px">${String(e.message).replace(/</g,'&lt;')}</div></div>`; }
+}
 function renderStats(){
   const s=statsFor(null);
   $('#statKpis').innerHTML=[
@@ -1735,6 +1762,7 @@ function renderStats(){
     ['Blunder rate', s.rate+'%'],['Puzzles mastered', s.mastered+' / '+s.totalPuzzles]
   ].map(([l,n])=>`<div class="kpi"><div class="n">${n}</div><div class="l">${l}</div></div>`).join('');
   renderPhaseBars($('#phaseBars'), s.phases);
+  renderAdminPanel();
   const fmt=o=>Object.entries(o).sort((x,y)=>y[1]-x[1]).map(([k,v])=>{
     const u=lichessPractice(k);
     return `${k} ×${v}`+(u?` <a href="${u}" target="_blank" rel="noopener" title="Endless ${k} puzzles on lichess">practice ↗</a>`:'');
