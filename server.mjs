@@ -429,8 +429,10 @@ const server = http.createServer(async (req, res) => {
 
     if (url.pathname === '/api/health') {
       const hu = sessionUser(req);
+      let db = USE_REDIS ? 'redis' : 'file';
+      if (USE_REDIS){ try { db = (await redis(['PING'])) === 'PONG' ? 'redis-ok' : 'redis-odd'; } catch(e){ db = 'redis-error: ' + e.message; } }
       res.writeHead(200, { 'content-type': 'application/json' });
-      return res.end(JSON.stringify({ llm: HAS_KEY, model: MODEL, auth: true, user: hu,
+      return res.end(JSON.stringify({ llm: HAS_KEY, model: MODEL, auth: true, db, user: hu,
         sub: hu ? { subscribed: isSubscribed(hu), aiUsed: (users[hu].aiGames||[]).length, aiFree: FREE_AI_GAMES, upgradeUrl: SUBSCRIBE_URL } : null }));
     }
 
@@ -477,7 +479,8 @@ const server = http.createServer(async (req, res) => {
       if (req.method === 'PUT') {
         let body; try { body = await readBody(req, 15e6); } catch { return json(413, { error: 'store too large' }); }
         try { JSON.parse(body); } catch { return json(400, { error: 'bad json' }); }
-        if (USE_REDIS) await redisSetBig('bl:store:'+u, body); else await writeFile(f, body);
+        try { if (USE_REDIS) await redisSetBig('bl:store:'+u, body); else await writeFile(f, body); }
+        catch(e){ return json(500, { error: 'store save failed: ' + e.message }); }
         return json(200, { ok: true, bytes: body.length });
       }
     }
