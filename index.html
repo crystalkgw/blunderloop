@@ -1267,21 +1267,27 @@ function renderGames(){
   const wrap=$('#gamesTableWrap');
   if(!games.length){ wrap.innerHTML='<div class="empty">Import games above to get started, or load the demo game.</div>'; return; }
   const t=el('table');
-  t.innerHTML='<thead><tr><th>Date</th><th>You were</th><th>Opponent</th><th>Result</th><th>Moves</th><th>Source</th><th>Blunders</th><th></th></tr></thead>';
+  t.innerHTML='<thead><tr><th>Date</th><th>You were</th><th>Opponent</th><th>Result</th><th>Moves</th><th>Source</th><th>Blunders</th><th>Puzzles</th><th></th></tr></thead>';
   const tb=el('tbody');
   for(const g of games.slice().reverse()){
     const bl=g.analysis?g.analysis.filter(a=>a.isUser&&a.tag==='blunder').length:null;
+    const pzn=store.puzzles.filter(p=>p.gameId===g.id).length;
     const resPill=g.result==='win'?'<span class="pill win">win</span>':g.result==='loss'?'<span class="pill loss">loss</span>':g.result==='draw'?'<span class="pill src">draw</span>':'<span class="pill src">?</span>';
     const tr=el('tr');
     tr.innerHTML=`<td>${g.date||'—'}</td><td>${g.userColor}</td><td>${g.opponent}</td><td>${resPill}</td><td>${g.sanMoves.length}</td><td><span class="pill src">${g.source}</span></td>
       <td>${g.analysis?`<b style="color:var(--bad)">${bl}</b>`:'<span class="muted">—</span>'}</td>
+      <td>${g.analysis?(pzn?`🧩 ${pzn}`:'<span class="muted">—</span>'):'<span class="muted">—</span>'}</td>
       <td class="row" style="justify-content:flex-end">${g.analysis
-        ? `<button class="btn sec" data-review="${g.id}">Review</button><button class="btn sec" data-reanalyze="${g.id}" title="Re-run with the latest, more accurate analysis">↻</button>`
+        ? `${pzn?`<button class="btn sec" data-drill="${g.id}" title="Train on this game's ${pzn} puzzle(s) right now">🧩 Drill</button>`:''}<button class="btn sec" data-review="${g.id}">Review</button><button class="btn sec" data-reanalyze="${g.id}" title="Re-run with the latest, more accurate analysis">↻</button>`
         : `<button class="btn" data-analyze="${g.id}">Analyze</button>`}</td>`;
     tb.appendChild(tr);
   }
   t.appendChild(tb); wrap.innerHTML=''; wrap.appendChild(t);
   wrap.querySelectorAll('[data-analyze]').forEach(b=>b.onclick=()=>analyzeFlow([store.games.find(x=>x.id===b.dataset.analyze)]));
+  wrap.querySelectorAll('[data-drill]').forEach(b=>b.onclick=()=>{
+    tn.seed=store.puzzles.filter(p=>p.gameId===b.dataset.drill).sort((x,y)=>x.ply-y.ply);
+    switchView('train');
+  });
   wrap.querySelectorAll('[data-reanalyze]').forEach(b=>b.onclick=()=>{
     const g=store.games.find(x=>x.id===b.dataset.reanalyze); if(!g) return;
     // drop old analysis + this game's unsolved puzzles, then run the current pipeline fresh
