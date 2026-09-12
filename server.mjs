@@ -61,8 +61,10 @@ function aiGate(key, creditKey){
 
 /* ---- pluggable persistence: JSON files locally; Upstash Redis (free tier) on disk-less hosts.
    Set UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN to switch. ---- */
-const REDIS_URL = process.env.UPSTASH_REDIS_REST_URL || '';
-const REDIS_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || '';
+// dashboards often display these wrapped in quotes — strip them if they were pasted along
+const cleanEnv = v => String(v||'').trim().replace(/^["']+|["']+$/g,'');
+const REDIS_URL = cleanEnv(process.env.UPSTASH_REDIS_REST_URL);
+const REDIS_TOKEN = cleanEnv(process.env.UPSTASH_REDIS_REST_TOKEN);
 const USE_REDIS = !!(REDIS_URL && REDIS_TOKEN);
 async function redis(cmd){
   const r = await fetch(REDIS_URL, { method:'POST', headers:{ Authorization:`Bearer ${REDIS_TOKEN}`, 'content-type':'application/json' }, body: JSON.stringify(cmd) });
