@@ -291,6 +291,7 @@
         <span class="who" style="font-weight:700;color:var(--acc2)"></span>
         <button class="btn sec" id="trainBackMine" style="margin-left:auto">← Back to my puzzles</button>
       </div>
+      <div id="lpBar" style="margin-bottom:12px"></div>
       <div id="trainEmpty" class="empty">No puzzles yet — import and analyze some games first.</div>
       <div id="trainActive" style="display:none">
         <div class="boardWrap">
@@ -1513,11 +1514,55 @@ function renderTrainMeta(){
   $('#tmMaster').textContent=pool.filter(p=>p.box>=MAX_BOX).length;
   const myDue=puzzlesFor(null).filter(p=>p.dueAt<=todayEnd()).length;
   const badge=$('#dueBadge'); if(myDue){badge.style.display='inline-block';badge.textContent=myDue;}else badge.style.display='none';
+  renderLpBar();
   const banner=$('#trainBanner');
   if(tn.profile){ banner.style.display='flex'; banner.querySelector('.who').textContent='Coaching: '+studentName(tn.profile); }
   else banner.style.display='none';
 }
 function drillProfile(sid){ tn.profile=sid||null; switchView('train'); }
+/* ---- fresh puzzles pulled from lichess, themed to the player's weaknesses ---- */
+async function fetchLichessPuzzle(slug){
+  const r=await fetch('https://lichess.org/api/puzzle/next'+(slug&&slug!=='mix'?`?angle=${encodeURIComponent(slug)}`:''));
+  if(!r.ok) throw new Error('lichess HTTP '+r.status);
+  const d=await r.json();
+  const c=new Chess(); let last=null;
+  for(const m of d.game.pgn.trim().split(/\s+/)){ last=c.move(m,{sloppy:true}); if(!last) throw new Error('unreadable puzzle'); }
+  const fen=c.fen(); const sol=d.puzzle.solution;
+  const t=new Chess(fen); const first=t.move({from:sol[0].slice(0,2),to:sol[0].slice(2,4),promotion:sol[0][4]||'q'});
+  if(!first) throw new Error('unreadable solution');
+  const lineSan=[first.san];
+  for(let i=1;i<sol.length;i++){ const mm=t.move({from:sol[i].slice(0,2),to:sol[i].slice(2,4),promotion:sol[i][4]||'q'}); if(!mm) break; lineSan.push(mm.san); }
+  return { id:'lp_'+d.puzzle.id, external:true, lpId:d.puzzle.id, angle:slug||'mix', fen,
+    correctUci:sol[0], correctSan:first.san, solutionSan:lineSan.join(' '),
+    oppLastSan:last.san, oppLastUci:last.from+last.to+(last.promotion||''),
+    theme:(d.puzzle.themes||[])[0]||slug, rating:d.puzzle.rating,
+    playedSan:null, box:0, dueAt:0, history:[] };
+}
+async function startLichessSet(slug){
+  const stEl=$('#lpStatus'); const seen=new Set(); const out=[];
+  try{
+    for(let i=0;i<8 && out.length<5;i++){
+      if(stEl) stEl.textContent=`fetching puzzle ${out.length+1}/5…`;
+      const pz=await fetchLichessPuzzle(slug);
+      if(!seen.has(pz.id)){ seen.add(pz.id); out.push(pz); }
+    }
+  }catch(e){ if(stEl) stEl.textContent='lichess fetch failed: '+e.message; if(!out.length) return; }
+  if(stEl) stEl.textContent='';
+  tn.seed=out; startTrain();
+}
+function renderLpBar(){
+  const bar=$('#lpBar'); if(!bar) return;
+  const st=statsFor(tn.profile);
+  const slugs={};
+  Object.entries(st.themes).sort((x,y)=>y[1]-x[1]).forEach(([k])=>{ const sl=LICHESS_THEMES[k]; if(sl&&sl!=='mix'&&!slugs[sl]) slugs[sl]=k; });
+  Object.entries(st.endgames).sort((x,y)=>y[1]-x[1]).forEach(([k])=>{ const sl=LICHESS_EG[k]; if(sl&&!slugs[sl]) slugs[sl]=k; });
+  const btns=Object.entries(slugs).slice(0,4).map(([sl,label])=>`<button class="btn sec" data-lp="${sl}">${label}</button>`).join('');
+  bar.innerHTML=`<div class="row" style="gap:8px;align-items:center;flex-wrap:wrap">
+    <span class="sub" style="margin:0">🧩 Fresh Lichess puzzles${Object.keys(slugs).length?' on your weak patterns':''}:</span>
+    ${btns}<button class="btn sec" data-lp="mix">surprise mix</button>
+    <span id="lpStatus" class="muted" style="font-size:12px"></span></div>`;
+  bar.querySelectorAll('[data-lp]').forEach(b=>b.onclick=()=>startLichessSet(b.dataset.lp));
+}
 function startTrain(){
   if(tn.seed && tn.seed.length){ tn.queue=tn.seed.slice(); tn.seed=null; renderTrainMeta(); nextPuzzle(); return; }
   const now=todayEnd(); const pool=puzzlesFor(tn.profile);
@@ -1544,6 +1589,10 @@ function nextPuzzle(){
   tn.pos=new Chess(tn.cur.fen); tn.sel=null; tn.targets=[]; tn.solved=false; tn.arrows=[];
   tn.orient = tn.pos.turn()==='w'?'white':'black';
   $('#trainSide').textContent=(tn.pos.turn()==='w'?'White':'Black')+' to move — find the best move.';
+  if(tn.cur.external){
+    $('#trainInfo').innerHTML=`🧩 Fresh from Lichess · <b>${tn.cur.theme}</b> · puzzle rating ${tn.cur.rating}. Find the best move.`;
+    drawTrain(); return;
+  }
   const whose = tn.profile ? studentName(tn.profile)+"'s" : 'your';
   $('#trainInfo').innerHTML = engineDetails()
     ? `From ${whose} game vs <b>${tn.cur.opponent}</b>. In the game ${tn.profile?'they':'you'} played <code class="mini">${tn.cur.playedSan}</code> here and lost ${(tn.cur.lossCp/100).toFixed(1)} pawns. Play the move the engine would.`
@@ -1577,11 +1626,13 @@ function tryMove(from,to){
 function grade(correct, mv){
   tn.solved=true; tn.sel=null; tn.targets=[];
   const p=tn.cur;
-  p.history.push({at:Date.now(),correct});
-  if(correct){ p.box=Math.min(MAX_BOX,p.box+1); }
-  else{ p.box=1; }
-  p.dueAt=Date.now()+INTERVALS[p.box-1]*DAY;
-  save(); renderTrainMeta();
+  if(!p.external){
+    p.history.push({at:Date.now(),correct});
+    if(correct){ p.box=Math.min(MAX_BOX,p.box+1); }
+    else{ p.box=1; }
+    p.dueAt=Date.now()+INTERVALS[p.box-1]*DAY;
+    save(); renderTrainMeta();
+  }
   // teaching arrows on the original position: green best, red the game blunder, amber opponent
   tn.pos=new Chess(p.fen);
   const gu=p.correctUci||moveUci(p.fen,p.correctSan);
@@ -1598,7 +1649,12 @@ function grade(correct, mv){
   if(goodArrow) steps.push({arrow:goodArrow, say:`The best move is ${p.correctSan}.`});
   revealTeaching('#trainBoard', steps, tn.orient);
   const flash=$('#trainFlash');
-  if(correct){
+  if(p.external){
+    flash.className='';
+    flash.innerHTML = correct
+      ? `<div class="flash ok">✓ Correct — <code class="mini">${p.correctSan}</code>. Full solution: <code class="mini">${p.solutionSan}</code>.</div>`
+      : `<div class="flash no">✗ You played <code class="mini">${mv.san}</code>. The solution starts <code class="mini">${p.correctSan}</code> — full line: <code class="mini">${p.solutionSan}</code>.</div>`;
+  }else if(correct){
     flash.className=''; flash.innerHTML=`<div class="flash ok">✓ Correct — <code class="mini">${p.correctSan}</code> (green). Moved up to box ${p.box}; next review in ${INTERVALS[p.box-1]} day(s).</div>`;
   }else{
     flash.innerHTML=`<div class="flash no">✗ You played <code class="mini">${mv.san}</code>. Best was <code class="mini">${p.correctSan}</code> (green arrow). Back to box 1 — you'll see this one again today.</div>`;
@@ -1606,9 +1662,9 @@ function grade(correct, mv){
   }
   const th = p.theme || (()=>{ try{ const c2=new Chess(p.fen); c2.move(p.playedSan,{sloppy:true}); return tacticThemeOf({fenAfter:c2.fen(), refutationLineSan:p.refutationLineSan, wasMateAfter:p.mateAfter}); }catch(e){ return null; } })();
   flash.insertAdjacentHTML('beforeend', `<div class="arrowkey"><span class="k-good"><i></i>Best: ${p.correctSan}</span><span class="k-bad"><i></i>Game move: ${p.playedSan}</span>${p.oppLastSan?`<span class="k-opp"><i></i>Opponent: ${p.oppLastSan}</span>`:''}${th?`<span class="muted">pattern: ${th}</span>`:''}</div>`);
-  const thUrl=(th&&lichessPractice(th))||'https://lichess.org/training/mix';
+  const thUrl=p.external?`https://lichess.org/training/${p.angle||'mix'}`:((th&&lichessPractice(th))||'https://lichess.org/training/mix');
   flash.insertAdjacentHTML('beforeend', `<div class="guessline"><a class="btn sec" style="display:inline-block;text-decoration:none" href="${thUrl}" target="_blank" rel="noopener">🧩 Practice ${th||'similar tactics'} on Lichess</a></div>`);
-  attachAI(flash, tn.cur, ()=>aiPayloadForPuzzle(tn.cur));
+  if(!p.external) attachAI(flash, tn.cur, ()=>aiPayloadForPuzzle(tn.cur));
   $('#trainNext').style.display='block';
 }
 $('#tnContinue').onclick=nextPuzzle;
