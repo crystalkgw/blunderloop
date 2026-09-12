@@ -113,6 +113,12 @@ if (!SECRET){
 }
 
 const hashPw = (pw, salt) => scryptSync(pw, salt, 64).toString('hex');
+// account recovery code: 12 hex chars, hashed like a password; displayed once as XXXX-XXXX-XXXX
+function mintRecovery(){
+  const raw = randomBytes(6).toString('hex').toUpperCase();
+  const salt = randomBytes(16).toString('hex');
+  return { code: `${raw.slice(0,4)}-${raw.slice(4,8)}-${raw.slice(8,12)}`, salt, hash: hashPw(raw, salt) };
+}
 const sign = s => createHmac('sha256', SECRET).update(s).digest('hex');
 function makeToken(u){ const exp = Date.now() + 30*24*3600*1000; const body = `${u}.${exp}`; return `${body}.${sign(body)}`; }
 function verifyToken(tok){
@@ -450,10 +456,56 @@ const server = http.createServer(async (req, res) => {
       const key = u.toLowerCase();
       if (users[key]) return json(409, { error: 'That username is taken.' });
       const salt = randomBytes(16).toString('hex');
-      users[key] = { name: u, salt, hash: hashPw(pw, salt), created: Date.now() };
+      const email = String(b?.email || '').trim().slice(0, 120) || null;
+      const rec = mintRecovery();
+      users[key] = { name: u, salt, hash: hashPw(pw, salt), created: Date.now(), email,
+                     recSalt: rec.salt, recHash: rec.hash };
       saveUsers();
       setSession(req, res, makeToken(key));
-      return json(200, { user: key });
+      return json(200, { user: key, recoveryCode: rec.code });
+    }
+    // reset a forgotten password using the recovery code saved at registration
+    if (url.pathname === '/api/recover' && req.method === 'POST') {
+      if (authLimited(req.socket.remoteAddress)) return json(429, { error: 'Too many attempts — wait a few minutes.' });
+      let b; try { b = JSON.parse(await readBody(req)); } catch { return json(400, { error: 'bad json' }); }
+      const key = String(b?.username || '').trim().toLowerCase();
+      const code = String(b?.recoveryCode || '').toUpperCase().replace(/[^A-F0-9]/g, '');
+      const npw = String(b?.newPassword || '');
+      if (npw.length < 8) return json(400, { error: 'New password must be at least 8 characters.' });
+      const rec = users[key];
+      const candidate = hashPw(code || 'x', rec && rec.recSalt ? rec.recSalt : '00');
+      const ok = rec && rec.recHash && timingSafeEqual(Buffer.from(candidate), Buffer.from(rec.recHash));
+      if (!ok) return json(401, { error: (rec && !rec.recHash)
+        ? 'This account has no recovery code on file — ask the site admin to reset your password.'
+        : 'Wrong username or recovery code.' });
+      rec.salt = randomBytes(16).toString('hex'); rec.hash = hashPw(npw, rec.salt);
+      const fresh = mintRecovery(); rec.recSalt = fresh.salt; rec.recHash = fresh.hash;
+      saveUsers();
+      setSession(req, res, makeToken(key));
+      return json(200, { user: key, recoveryCode: fresh.code });
+    }
+    // change password (signed in)
+    if (url.pathname === '/api/password' && req.method === 'POST') {
+      const au = sessionUser(req);
+      if (!au) return json(401, { error: 'not signed in' });
+      let b; try { b = JSON.parse(await readBody(req)); } catch { return json(400, { error: 'bad json' }); }
+      const npw = String(b?.newPassword || '');
+      if (npw.length < 8) return json(400, { error: 'New password must be at least 8 characters.' });
+      const rec = users[au];
+      const cand = hashPw(String(b?.current || ''), rec.salt);
+      if (!timingSafeEqual(Buffer.from(cand), Buffer.from(rec.hash))) return json(401, { error: 'Current password is wrong.' });
+      rec.salt = randomBytes(16).toString('hex'); rec.hash = hashPw(npw, rec.salt);
+      saveUsers();
+      return json(200, { ok: true });
+    }
+    // mint a fresh recovery code (signed in; replaces the old one)
+    if (url.pathname === '/api/recovery-code' && req.method === 'POST') {
+      const au = sessionUser(req);
+      if (!au) return json(401, { error: 'not signed in' });
+      const fresh = mintRecovery();
+      users[au].recSalt = fresh.salt; users[au].recHash = fresh.hash;
+      saveUsers();
+      return json(200, { recoveryCode: fresh.code });
     }
     if (url.pathname === '/api/login' && req.method === 'POST') {
       if (authLimited(req.socket.remoteAddress)) return json(429, { error: 'Too many attempts — wait a few minutes.' });
@@ -493,6 +545,16 @@ const server = http.createServer(async (req, res) => {
       if (!au || !ADMIN_USERS.includes(au)) return json(403, { error: 'admin only' });
       if (url.pathname === '/api/admin/users')
         return json(200, { users: Object.entries(users).map(([k,v])=>({ username:k, created:new Date(v.created).toISOString().slice(0,10), subscribed:isSubscribed(k), aiGamesUsed:(v.aiGames||[]).length })) });
+      if (url.pathname === '/api/admin/resetpw' && req.method === 'POST') {
+        let b; try { b = JSON.parse(await readBody(req)); } catch { return json(400, { error: 'bad json' }); }
+        const key = String(b?.username || '').toLowerCase();
+        if (!users[key]) return json(404, { error: 'no such user' });
+        const temp = randomBytes(5).toString('hex');
+        users[key].salt = randomBytes(16).toString('hex');
+        users[key].hash = hashPw(temp, users[key].salt);
+        saveUsers();
+        return json(200, { username: key, tempPassword: temp });
+      }
       if (url.pathname === '/api/admin/subscribe' && req.method === 'POST') {
         let b; try { b = JSON.parse(await readBody(req)); } catch { return json(400, { error: 'bad json' }); }
         const key = String(b?.username || '').toLowerCase();

@@ -148,13 +148,11 @@
     <div id="acctBar" style="display:none;margin-left:auto;align-items:center;gap:8px;font-size:13px">
       <span id="acctIn" style="display:none;align-items:center;gap:8px">
         <span>👤 <b id="acctName"></b></span><span id="acctPlan" class="muted"></span><span id="syncDot" class="muted"></span>
+        <button class="btn sec" id="acctGear" style="padding:5px 10px" title="Account settings — change password, recovery code">⚙</button>
         <button class="btn sec" id="acctOut" style="padding:5px 10px">Sign out</button>
       </span>
-      <span id="acctForms" style="display:none;align-items:center;gap:6px;flex-wrap:wrap">
-        <input id="acctUser" placeholder="username" autocomplete="username" style="width:110px"/>
-        <input id="acctPw" type="password" placeholder="password" autocomplete="current-password" style="width:110px"/>
-        <button class="btn sec" id="acctLogin" style="padding:5px 10px">Sign in</button>
-        <button class="btn sec" id="acctReg" style="padding:5px 10px" title="Create an account — your games and training progress sync across devices">Register</button>
+      <span id="acctForms" style="display:none">
+        <button class="btn sec" id="acctOpenBtn" style="padding:5px 10px" title="Your games and training progress sync across devices">Sign in / Register</button>
       </span>
     </div>
     <nav class="tabs" id="tabs">
@@ -348,6 +346,55 @@
     </div>
     <div id="coachBody"></div>
   </section>
+</div>
+<div id="authModal" style="display:none;position:fixed;inset:0;background:rgba(5,8,18,.72);z-index:60;align-items:center;justify-content:center">
+  <div class="card" style="width:min(430px,94vw);max-height:92vh;overflow:auto">
+    <div class="row" style="gap:6px;margin-bottom:12px;align-items:center">
+      <button class="btn sec authTab" data-tab="login" style="padding:6px 10px">Sign in</button>
+      <button class="btn sec authTab" data-tab="reg" style="padding:6px 10px">Create account</button>
+      <button class="btn sec authTab" data-tab="forgot" style="padding:6px 10px">Forgot password</button>
+      <button class="btn sec" id="authClose" style="margin-left:auto;padding:6px 10px" title="Close">✕</button>
+    </div>
+    <div id="authErr" style="display:none;color:var(--bad);font-size:13px;margin-bottom:10px"></div>
+    <div class="authPane" id="pane-login">
+      <label class="fld">Username</label><input id="liUser" autocomplete="username"/>
+      <label class="fld">Password</label><input id="liPw" type="password" autocomplete="current-password"/>
+      <button class="btn" id="liBtn" style="margin-top:14px;width:100%">Sign in</button>
+      <div class="muted" style="font-size:12px;margin-top:10px"><a href="#" id="liForgot">Forgot your password?</a></div>
+    </div>
+    <div class="authPane" id="pane-reg" style="display:none">
+      <label class="fld">Username <span class="muted">(3–20 letters, digits, - or _)</span></label><input id="rgUser" autocomplete="username"/>
+      <label class="fld">Email <span class="muted">(optional — helps account recovery)</span></label><input id="rgEmail" type="email" autocomplete="email"/>
+      <label class="fld">Password <span class="muted">(at least 8 characters)</span></label><input id="rgPw" type="password" autocomplete="new-password"/>
+      <label class="fld">Repeat password</label><input id="rgPw2" type="password" autocomplete="new-password"/>
+      <button class="btn" id="rgBtn" style="margin-top:14px;width:100%">Create account</button>
+      <div class="muted" style="font-size:12px;margin-top:10px">Free · your games and training progress sync across devices · AI coaching on your first 5 games included.</div>
+    </div>
+    <div class="authPane" id="pane-forgot" style="display:none">
+      <p class="sub" style="margin:0 0 10px">Enter the recovery code you saved when the account was created, and pick a new password.</p>
+      <label class="fld">Username</label><input id="fgUser" autocomplete="username"/>
+      <label class="fld">Recovery code</label><input id="fgCode" placeholder="XXXX-XXXX-XXXX" style="text-transform:uppercase" autocomplete="off"/>
+      <label class="fld">New password</label><input id="fgPw" type="password" autocomplete="new-password"/>
+      <button class="btn" id="fgBtn" style="margin-top:14px;width:100%">Reset password</button>
+      <div class="muted" style="font-size:12px;margin-top:10px">Lost the code too? Ask the site admin to reset your password.</div>
+    </div>
+    <div class="authPane" id="pane-code" style="display:none">
+      <h2 style="margin:0 0 6px">🔑 Save your recovery code</h2>
+      <p class="sub" style="margin:0 0 6px">This code is the <b>only</b> way to reset a forgotten password. Write it down or screenshot it — it will not be shown again.</p>
+      <div id="codeBox" style="font-family:ui-monospace,monospace;font-size:22px;font-weight:800;letter-spacing:2px;text-align:center;padding:16px;border:1px dashed var(--acc);border-radius:10px;margin:12px 0"></div>
+      <button class="btn sec" id="codeCopy" style="width:100%">Copy code</button>
+      <button class="btn" id="codeDone" style="margin-top:8px;width:100%">I saved it — continue</button>
+    </div>
+    <div class="authPane" id="pane-acct" style="display:none">
+      <h2 style="margin:0 0 10px">Account — <span id="acctModalName"></span></h2>
+      <label class="fld">Current password</label><input id="cpOld" type="password" autocomplete="current-password"/>
+      <label class="fld">New password <span class="muted">(at least 8 characters)</span></label><input id="cpNew" type="password" autocomplete="new-password"/>
+      <button class="btn sec" id="cpBtn" style="margin-top:10px">Change password</button>
+      <hr style="border:none;border-top:1px solid var(--line);margin:16px 0">
+      <p class="sub" style="margin:0 0 8px">Your recovery code resets a forgotten password. Generating a new one replaces the old code.</p>
+      <button class="btn sec" id="rcBtn">🔑 Generate new recovery code</button>
+    </div>
+  </div>
 </div>
 <div class="toast" id="toast"></div>
 
@@ -825,22 +872,82 @@ function scheduleCloudSave(){
     _cloudBusy=false;
   },1500);
 }
-async function acctSubmit(pathname){
-  const u=$('#acctUser').value.trim(), pw=$('#acctPw').value;
-  if(!u||!pw) return toast('Enter a username and a password');
-  try{
-    const r=await fetch(pathname,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({username:u,password:pw})});
-    const j=await r.json();
-    if(!r.ok) return toast(j.error||('HTTP '+r.status));
-    AUTH.user=j.user; $('#acctPw').value=''; acctRender();
-    toast((pathname==='/api/register'?'Account created — ':'')+'signed in as '+j.user);
-    await adoptCloud();
-  }catch(e){ toast('Network error: '+e.message); }
+/* ---- auth modal: sign in / register / forgot password / account settings ---- */
+function authShow(pane){
+  $('#authModal').style.display='flex';
+  const e=$('#authErr'); e.style.display='none'; e.textContent='';
+  document.querySelectorAll('.authPane').forEach(pn=>pn.style.display='none');
+  const el=$('#pane-'+pane); if(el) el.style.display='block';
+  const tabbed=['login','reg','forgot'].includes(pane);
+  document.querySelectorAll('.authTab').forEach(b=>{ b.style.display=tabbed?'':'none'; b.style.outline=b.dataset.tab===pane?'2px solid var(--acc)':'none'; });
+  const f=el&&el.querySelector('input'); if(f) setTimeout(()=>f.focus(),60);
 }
-$('#acctLogin').onclick=()=>acctSubmit('/api/login');
-$('#acctReg').onclick=()=>acctSubmit('/api/register');
-$('#acctPw').addEventListener('keydown',e=>{ if(e.key==='Enter') acctSubmit('/api/login'); });
-$('#acctOut').onclick=async()=>{ try{ await fetch('/api/logout',{method:'POST'}); }catch(e){} AUTH.user=null; acctRender(); syncDot(''); toast('Signed out — this browser keeps its local copy'); };
+function authHide(){ $('#authModal').style.display='none'; }
+function authError(m){ const e=$('#authErr'); e.textContent=m; e.style.display='block'; }
+async function authPost(url, body){
+  const r=await fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(j.error||('HTTP '+r.status));
+  return j;
+}
+// the recovery code is shown exactly once, behind an explicit "I saved it"
+function showRecoveryCode(code, next){
+  $('#codeBox').textContent=code;
+  authShow('code');
+  $('#codeCopy').onclick=async()=>{ try{ await navigator.clipboard.writeText(code); toast('Copied ✓'); }catch(e){ toast('Select the code and copy it manually'); } };
+  $('#codeDone').onclick=()=>{ authHide(); if(next) next(); };
+}
+async function afterSignIn(msg){ if(msg) toast(msg); await checkLLM(); }   // checkLLM re-reads health → AUTH, badge, adoptCloud
+$('#acctOpenBtn').onclick=()=>authShow('login');
+$('#acctGear').onclick=()=>{ $('#acctModalName').textContent=AUTH.user||''; authShow('acct'); };
+$('#authClose').onclick=authHide;
+$('#authModal').addEventListener('click',e=>{ if(e.target===$('#authModal')) authHide(); });
+document.querySelectorAll('.authTab').forEach(b=>b.onclick=()=>authShow(b.dataset.tab));
+$('#liForgot').onclick=e=>{ e.preventDefault(); authShow('forgot'); };
+$('#liBtn').onclick=async()=>{
+  try{
+    const j=await authPost('/api/login',{username:$('#liUser').value.trim(),password:$('#liPw').value});
+    $('#liPw').value=''; authHide(); await afterSignIn('Signed in as '+j.user);
+  }catch(e){ authError(e.message); }
+};
+$('#rgBtn').onclick=async()=>{
+  const u=$('#rgUser').value.trim(), p1=$('#rgPw').value, p2=$('#rgPw2').value;
+  if(!/^[a-zA-Z0-9_-]{3,20}$/.test(u)) return authError('Username: 3–20 letters, digits, - or _');
+  if(p1.length<8) return authError('Password must be at least 8 characters.');
+  if(p1!==p2) return authError("The two passwords don't match.");
+  try{
+    const j=await authPost('/api/register',{username:u,email:$('#rgEmail').value.trim(),password:p1});
+    $('#rgPw').value=''; $('#rgPw2').value='';
+    showRecoveryCode(j.recoveryCode, ()=>afterSignIn('Account created — welcome, '+j.user+'!'));
+  }catch(e){ authError(e.message); }
+};
+$('#fgBtn').onclick=async()=>{
+  try{
+    const j=await authPost('/api/recover',{username:$('#fgUser').value.trim(),recoveryCode:$('#fgCode').value,newPassword:$('#fgPw').value});
+    $('#fgPw').value=''; $('#fgCode').value='';
+    showRecoveryCode(j.recoveryCode, ()=>afterSignIn('Password reset — signed in as '+j.user+'. That was your NEW recovery code.'));
+  }catch(e){ authError(e.message); }
+};
+$('#cpBtn').onclick=async()=>{
+  try{
+    await authPost('/api/password',{current:$('#cpOld').value,newPassword:$('#cpNew').value});
+    $('#cpOld').value=''; $('#cpNew').value=''; authHide(); toast('Password changed ✓');
+  }catch(e){ authError(e.message); }
+};
+$('#rcBtn').onclick=async()=>{
+  try{ const j=await authPost('/api/recovery-code',{}); showRecoveryCode(j.recoveryCode,null); }
+  catch(e){ authError(e.message); }
+};
+$('#authModal').addEventListener('keydown',e=>{
+  if(e.key==='Escape') return authHide();
+  if(e.key!=='Enter') return;
+  const map={'pane-login':'#liBtn','pane-reg':'#rgBtn','pane-forgot':'#fgBtn','pane-acct':'#cpBtn'};
+  for(const [pane,btn] of Object.entries(map)){
+    const pn=$('#'+pane);
+    if(pn && pn.style.display!=='none'){ const b=$(btn); if(b) b.click(); break; }
+  }
+});
+$('#acctOut').onclick=async()=>{ try{ await fetch('/api/logout',{method:'POST'}); }catch(e){} AUTH.user=null; AUTH.sub=null; acctRender(); syncDot(''); toast('Signed out — this browser keeps its local copy'); };
 
 async function checkLLM(){
   try{ const r=await fetch('/api/health'); if(r.ok){ const j=await r.json(); LLM.enabled=!!j.llm; LLM.model=j.model||null; AUTH.available=!!j.auth; AUTH.user=j.user||null; AUTH.sub=j.sub||null; } }
@@ -1740,10 +1847,21 @@ async function renderAdminPanel(){
     const rows=j.users.slice().sort((x,y)=>x.created<y.created?1:-1).map(u=>`<tr>
       <td><b>${u.username}</b></td><td>${u.created}</td><td>${u.aiGamesUsed}</td>
       <td>${u.subscribed?'✨ yes':'<span class="muted">no</span>'}</td>
-      <td style="text-align:right"><button class="btn sec" data-sub="${u.username}" data-to="${u.subscribed?0:1}">${u.subscribed?'Deactivate':'Activate ✨'}</button></td></tr>`).join('');
+      <td style="text-align:right"><button class="btn sec" data-sub="${u.username}" data-to="${u.subscribed?0:1}">${u.subscribed?'Deactivate':'Activate ✨'}</button>
+        <button class="btn sec" data-rpw="${u.username}" title="Set a temporary password for this user">Reset pw</button></td></tr>`).join('');
     box.innerHTML=`<div class="card"><h2 style="margin:0 0 4px">⚙ Admin — subscribers</h2>
       <p class="sub" style="margin:0 0 10px">When Stripe emails you about a payment, find the buyer's Blunderloop username in the payment details and click Activate. Deactivate if a subscription lapses.</p>
       <table><thead><tr><th>User</th><th>Joined</th><th>AI games used</th><th>Subscribed</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+    box.querySelectorAll('[data-rpw]').forEach(b=>b.onclick=async()=>{
+      if(!confirm(`Reset ${b.dataset.rpw}'s password to a temporary one? Their current password stops working.`)) return;
+      b.disabled=true;
+      try{
+        const rr=await fetch('/api/admin/resetpw',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({username:b.dataset.rpw})});
+        const jj=await rr.json(); if(!rr.ok) throw new Error(jj.error||('HTTP '+rr.status));
+        b.outerHTML=`<code class="mini" title="Send this to the user — they should change it after signing in">temp: ${jj.tempPassword}</code>`;
+        toast('Temporary password set — send it to the user');
+      }catch(e){ toast('Admin: '+e.message); b.disabled=false; }
+    });
     box.querySelectorAll('[data-sub]').forEach(b=>b.onclick=async()=>{
       b.disabled=true;
       try{
