@@ -82,6 +82,8 @@
   .arrowkey span{display:inline-flex;align-items:center;gap:5px}
   .arrowkey i{width:16px;height:0;border-top:3px solid;border-radius:2px}
   .arrowkey .k-good{color:#3ecf8e}.arrowkey .k-bad{color:#ff5364}.arrowkey .k-opp{color:#f0b23c}
+  .gp-row{display:flex;gap:8px;align-items:center;padding:6px 8px;border-radius:8px;cursor:pointer;font-size:13px}
+  .gp-row:hover{background:rgba(110,168,254,.12)}
   .sq.target::before{content:"";position:absolute;width:26%;height:26%;border-radius:50%;background:rgba(20,25,35,.35)}
   .sq.capture::before{content:"";position:absolute;inset:8%;border-radius:50%;border:4px solid rgba(20,25,35,.35)}
   .sq .coord{position:absolute;font-size:9px;color:rgba(20,25,35,.55);font-weight:700}
@@ -267,6 +269,7 @@
             <span><i style="background:var(--warn)"></i>Mistake ≥1.2</span>
             <span><i style="background:var(--inacc)"></i>Inaccuracy ≥0.5</span>
           </div>
+          <div id="gamePuzzles" style="margin-top:14px"></div>
         </div>
       </div>
     </div>
@@ -1423,6 +1426,27 @@ function drawReview(){
     ml.appendChild(m);
   }
   const curMv=ml.querySelector('.cur'); if(curMv) curMv.scrollIntoView({block:'nearest'});
+  renderGamePuzzles(g);
+}
+// the drills born from this game, right beside its review — click a row to jump to that moment
+function renderGamePuzzles(g){
+  const box=$('#gamePuzzles'); if(!box) return;
+  const pz=store.puzzles.filter(p=>p.gameId===g.id).sort((a,b)=>a.ply-b.ply);
+  if(!pz.length){ box.innerHTML='<div class="muted" style="font-size:13px">🧩 No drill puzzles from this game — no tactical blunders found.</div>'; return; }
+  box.innerHTML=`<h2 style="font-size:14px;margin:0 0 6px">🧩 Puzzles from this game (${pz.length})</h2>`
+    + pz.map(p=>{
+        const mvNo=Math.floor((p.ply-1)/2)+1;
+        const state=p.box>1?'✅':(p.dueAt<=todayEnd()?'🔴':'🕐');
+        return `<div class="gp-row" data-ply="${p.ply}" title="Jump to this moment in the game">
+          <span>${state}</span>
+          <span><b>move ${mvNo}</b> — you played <code class="mini">${p.playedSan}</code>, best <code class="mini">${p.correctSan}</code></span>
+          ${p.theme?`<span class="muted">${p.theme}</span>`:''}
+          <span class="muted" style="margin-left:auto">box ${p.box}</span>
+        </div>`;
+      }).join('')
+    + `<button class="btn sec" id="drillGameBtn" style="margin-top:8px">🎯 Drill these ${pz.length} now</button>`;
+  box.querySelectorAll('.gp-row').forEach(r=>r.onclick=()=>{ rv.ply=+r.dataset.ply; drawReview(); });
+  $('#drillGameBtn').onclick=()=>{ tn.seed=pz.slice(); switchView('train'); };
 }
 $('#rvFirst').onclick=()=>{rv.ply=0;drawReview();};
 $('#rvPrev').onclick=()=>{if(rv.ply>0){rv.ply--;drawReview();}};
@@ -1466,6 +1490,7 @@ function renderTrainMeta(){
 }
 function drillProfile(sid){ tn.profile=sid||null; switchView('train'); }
 function startTrain(){
+  if(tn.seed && tn.seed.length){ tn.queue=tn.seed.slice(); tn.seed=null; renderTrainMeta(); nextPuzzle(); return; }
   const now=todayEnd(); const pool=puzzlesFor(tn.profile);
   tn.queue=pool.filter(p=>p.dueAt<=now).sort((a,b)=>a.dueAt-b.dueAt || b.lossCp-a.lossCp);
   renderTrainMeta();
