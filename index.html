@@ -1276,7 +1276,7 @@ function renderGames(){
     const tr=el('tr');
     tr.innerHTML=`<td>${g.date||'—'}</td><td>${g.userColor}</td><td>${g.opponent}</td><td>${resPill}</td><td>${g.sanMoves.length}</td><td><span class="pill src">${g.source}</span></td>
       <td>${g.analysis?`<b style="color:var(--bad)">${bl}</b>`:'<span class="muted">—</span>'}</td>
-      <td>${g.analysis?(pzn?`🧩 ${pzn}`:'<span class="muted">—</span>'):'<span class="muted">—</span>'}</td>
+      <td>${g.analysis?(pzn?`<span class="gp-count" data-pz="${g.id}" style="cursor:pointer;color:var(--acc)" title="Open this game's puzzle list in Review">🧩 ${pzn}</span>`:'<span class="muted">—</span>'):'<span class="muted">—</span>'}</td>
       <td class="row" style="justify-content:flex-end">${g.analysis
         ? `${pzn?`<button class="btn sec" data-drill="${g.id}" title="Train on this game's ${pzn} puzzle(s) right now">🧩 Drill</button>`:''}<button class="btn sec" data-review="${g.id}">Review</button><button class="btn sec" data-reanalyze="${g.id}" title="Re-run with the latest, more accurate analysis">↻</button>`
         : `<button class="btn" data-analyze="${g.id}">Analyze</button>`}</td>`;
@@ -1287,6 +1287,10 @@ function renderGames(){
   wrap.querySelectorAll('[data-drill]').forEach(b=>b.onclick=()=>{
     tn.seed=store.puzzles.filter(p=>p.gameId===b.dataset.drill).sort((x,y)=>x.ply-y.ply);
     switchView('train');
+  });
+  wrap.querySelectorAll('.gp-count').forEach(el=>el.onclick=()=>{
+    openReview(el.dataset.pz); switchView('review');
+    setTimeout(()=>{ const gp=$('#gamePuzzles'); if(gp) gp.scrollIntoView({behavior:'smooth',block:'center'}); },150);
   });
   wrap.querySelectorAll('[data-reanalyze]').forEach(b=>b.onclick=()=>{
     const g=store.games.find(x=>x.id===b.dataset.reanalyze); if(!g) return;
