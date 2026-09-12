@@ -1538,20 +1538,38 @@ async function fetchLichessPuzzle(slug){
     theme:(d.puzzle.themes||[])[0]||slug, rating:d.puzzle.rating,
     playedSan:null, box:0, dueAt:0, history:[] };
 }
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function startLichessSet(slug){
-  const stEl=$('#lpStatus'); const seen=new Set(); const out=[];
+  const count=parseInt(($('#lpCount')||{}).value||'20',10);
+  const myRun=Symbol(); tn.lpRun=myRun; tn.lpLoading=true;
+  const stEl=()=>$('#lpStatus');
+  const seen=new Set(); let fetched=0, started=false, attempts=0;
   try{
-    for(let i=0;i<8 && out.length<5;i++){
-      if(stEl) stEl.textContent=`fetching puzzle ${out.length+1}/5…`;
-      const pz=await fetchLichessPuzzle(slug);
-      if(!seen.has(pz.id)){ seen.add(pz.id); out.push(pz); }
+    while(fetched<count && attempts<count*2+10){
+      if(tn.lpRun!==myRun) return;                      // a newer set superseded this one
+      attempts++;
+      let pz=null;
+      try{ pz=await fetchLichessPuzzle(slug); }
+      catch(e){
+        if(String(e.message).includes('429')){ const el=stEl(); if(el) el.textContent='lichess rate limit — pausing 15s…'; await sleep(15000); continue; }
+        if(!started){ const el=stEl(); if(el) el.textContent='lichess fetch failed: '+e.message; return; }
+        break;                                          // mid-stream failure: train with what we have
+      }
+      if(seen.has(pz.id)){ await sleep(150); continue; }
+      seen.add(pz.id); fetched++;
+      if(!started){ started=true; tn.seed=[pz]; startTrain(); }
+      else tn.queue.push(pz);
+      const el=stEl(); if(el) el.textContent=`loaded ${fetched}/${count}…`;
+      await sleep(250);                                 // be polite to lichess
     }
-  }catch(e){ if(stEl) stEl.textContent='lichess fetch failed: '+e.message; if(!out.length) return; }
-  if(stEl) stEl.textContent='';
-  tn.seed=out; startTrain();
+  } finally {
+    if(tn.lpRun===myRun){ tn.lpLoading=false; const el=stEl(); if(el) el.textContent=fetched?`${fetched} puzzles loaded ✓`:''; }
+  }
 }
 function renderLpBar(){
   const bar=$('#lpBar'); if(!bar) return;
+  const keep=($('#lpStatus')||{}).textContent||'';
+  const keepCount=($('#lpCount')||{}).value||'20';
   const st=statsFor(tn.profile);
   const slugs={};
   Object.entries(st.themes).sort((x,y)=>y[1]-x[1]).forEach(([k])=>{ const sl=LICHESS_THEMES[k]; if(sl&&sl!=='mix'&&!slugs[sl]) slugs[sl]=k; });
@@ -1560,7 +1578,10 @@ function renderLpBar(){
   bar.innerHTML=`<div class="row" style="gap:8px;align-items:center;flex-wrap:wrap">
     <span class="sub" style="margin:0">🧩 Fresh Lichess puzzles${Object.keys(slugs).length?' on your weak patterns':''}:</span>
     ${btns}<button class="btn sec" data-lp="mix">surprise mix</button>
+    <select id="lpCount" title="How many puzzles to fetch"><option value="10">10</option><option value="20">20</option><option value="30">30</option><option value="50">50</option></select>
     <span id="lpStatus" class="muted" style="font-size:12px"></span></div>`;
+  $('#lpCount').value=keepCount;
+  const el=$('#lpStatus'); if(el) el.textContent=keep;
   bar.querySelectorAll('[data-lp]').forEach(b=>b.onclick=()=>startLichessSet(b.dataset.lp));
 }
 function startTrain(){
@@ -1585,6 +1606,11 @@ function nextPuzzle(){
   $('#trainEmpty').style.display='none'; $('#trainActive').style.display='block';
   $('#trainNext').style.display='none'; $('#trainFlash').innerHTML='';
   tn.cur=tn.queue.shift();
+  if(!tn.cur && tn.lpLoading){
+    $('#trainActive').style.display='none'; $('#trainEmpty').style.display='block';
+    $('#trainEmpty').innerHTML='🧩 Fetching more puzzles from Lichess…';
+    setTimeout(nextPuzzle, 800); return;
+  }
   if(!tn.cur){ $('#trainActive').style.display='none'; $('#trainEmpty').style.display='block'; $('#trainEmpty').innerHTML='Session complete — nicely done. 🎉'; renderTrainMeta(); return; }
   tn.pos=new Chess(tn.cur.fen); tn.sel=null; tn.targets=[]; tn.solved=false; tn.arrows=[];
   tn.orient = tn.pos.turn()==='w'?'white':'black';
