@@ -609,6 +609,12 @@ function tacticThemeOf(x){
     return null;
   }catch(e){ return null; }
 }
+// map our detected patterns to lichess's puzzle-trainer themes (free, endless supply)
+const LICHESS_THEMES={ 'mate threat':'mate', 'hanging queen':'hangingPiece', 'hanging piece':'hangingPiece',
+  'knight fork':'fork', 'double attack':'fork', 'exposed king':'exposedKing', 'pawn grab':'mix' };
+const LICHESS_EG={ 'rook endgames':'rookEndgame', 'pawn endgames':'pawnEndgame',
+  'queen endgames':'queenEndgame', 'minor-piece endgames':'endgame' };
+function lichessPractice(theme){ const t=LICHESS_THEMES[theme]||LICHESS_EG[theme]; return t?`https://lichess.org/training/${t}`:null; }
 // endgame family by remaining material
 function endgameTypeOf(fen){
   const pieces=(fen.split(' ')[0]||'').replace(/[^A-Za-z]/g,'').toLowerCase();
@@ -1389,7 +1395,8 @@ function drawReview(){
           ? `<div class="guessline" style="color:var(--good)">🎯 You found the engine's move yourself — that's the habit!</div>`
           : `<div class="guessline">You tried <code class="mini">${rv.guess.san}</code>; the engine went for <code class="mini">${mv.bestSan}</code> — compare the two ideas.</div>`);
       const patt=tacticThemeOf(mv);
-      cm.insertAdjacentHTML('beforeend', `<div class="arrowkey"><span class="k-bad"><i></i>You played ${mv.san}</span><span class="k-good"><i></i>Better: ${mv.bestSan}</span>${opp?`<span class="k-opp"><i></i>Opponent: ${opp.san}</span>`:''}${patt?`<span class="muted">pattern: ${patt}</span>`:''}</div>`);
+      const pUrl=patt&&lichessPractice(patt);
+      cm.insertAdjacentHTML('beforeend', `<div class="arrowkey"><span class="k-bad"><i></i>You played ${mv.san}</span><span class="k-good"><i></i>Better: ${mv.bestSan}</span>${opp?`<span class="k-opp"><i></i>Opponent: ${opp.san}</span>`:''}${patt?`<span class="muted">pattern: ${patt}${pUrl?` — <a href="${pUrl}" target="_blank" rel="noopener">practice ↗</a>`:''}</span>`:''}</div>`);
       cm.insertAdjacentHTML('beforeend', mv.deepDepth
         ? `<div class="guessline muted" style="font-size:12px">✓ verdict confirmed at depth ${mv.deepDepth}</div>`
         : `<div class="guessline"><button class="btn sec" id="deepBtn" title="Re-check this verdict with a deeper engine search (depth ${DEEP_DEPTH})">🔬 Check deeper</button></div>`);
@@ -1543,7 +1550,7 @@ function grade(correct, mv){
     if(p.dueAt<=todayEnd()) tn.queue.push(p); // re-drill this session
   }
   const th = p.theme || (()=>{ try{ const c2=new Chess(p.fen); c2.move(p.playedSan,{sloppy:true}); return tacticThemeOf({fenAfter:c2.fen(), refutationLineSan:p.refutationLineSan, wasMateAfter:p.mateAfter}); }catch(e){ return null; } })();
-  flash.insertAdjacentHTML('beforeend', `<div class="arrowkey"><span class="k-good"><i></i>Best: ${p.correctSan}</span><span class="k-bad"><i></i>Game move: ${p.playedSan}</span>${p.oppLastSan?`<span class="k-opp"><i></i>Opponent: ${p.oppLastSan}</span>`:''}${th?`<span class="muted">pattern: ${th}</span>`:''}</div>`);
+  flash.insertAdjacentHTML('beforeend', `<div class="arrowkey"><span class="k-good"><i></i>Best: ${p.correctSan}</span><span class="k-bad"><i></i>Game move: ${p.playedSan}</span>${p.oppLastSan?`<span class="k-opp"><i></i>Opponent: ${p.oppLastSan}</span>`:''}${th?`<span class="muted">pattern: ${th}${lichessPractice(th)?` — <a href="${lichessPractice(th)}" target="_blank" rel="noopener">practice ↗</a>`:''}</span>`:''}</div>`);
   attachAI(flash, tn.cur, ()=>aiPayloadForPuzzle(tn.cur));
   $('#trainNext').style.display='block';
 }
@@ -1589,10 +1596,14 @@ function renderStats(){
     ['Blunder rate', s.rate+'%'],['Puzzles mastered', s.mastered+' / '+s.totalPuzzles]
   ].map(([l,n])=>`<div class="kpi"><div class="n">${n}</div><div class="l">${l}</div></div>`).join('');
   renderPhaseBars($('#phaseBars'), s.phases);
-  const fmt=o=>Object.entries(o).sort((x,y)=>y[1]-x[1]).map(([k,v])=>`${k} ×${v}`).join(' · ');
+  const fmt=o=>Object.entries(o).sort((x,y)=>y[1]-x[1]).map(([k,v])=>{
+    const u=lichessPractice(k);
+    return `${k} ×${v}`+(u?` <a href="${u}" target="_blank" rel="noopener" title="Endless ${k} puzzles on lichess">practice ↗</a>`:'');
+  }).join(' · ');
   const themeTxt=fmt(s.themes), egTxt=fmt(s.endgames);
   $('#themeLine').innerHTML=(themeTxt?`<b>Tactics you keep missing:</b> ${themeTxt}`:'')
-    +(themeTxt&&egTxt?'<br>':'')+(egTxt?`<b>Endgame trouble spots:</b> ${egTxt}`:'');
+    +(themeTxt&&egTxt?'<br>':'')+(egTxt?`<b>Endgame trouble spots:</b> ${egTxt}`:'')
+    +((themeTxt||egTxt)?`<br><span class="muted">Links open lichess's free puzzle trainer filtered to that exact pattern — drill there, then come back and beat your own positions in Train.</span>`:'');
   const wrap=$('#statTable');
   if(!s.analyzed.length){ wrap.innerHTML='<div class="empty">Analyze some games to see stats.</div>'; return; }
   const t=el('table'); t.innerHTML='<thead><tr><th>Date</th><th>Opponent</th><th>You</th><th>Moves</th><th>Blunders</th><th>Mistakes</th></tr></thead>';
