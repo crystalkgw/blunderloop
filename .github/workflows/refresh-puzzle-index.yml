@@ -1,0 +1,42 @@
+# Refreshes puzzles/ (the similar-position retrieval index) from the latest
+# Lichess puzzle database. Runs on GitHub's servers every 2 months — often
+# enough to stay fresh, and frequent enough that GitHub never auto-disables
+# the schedule (it pauses schedules after ~60 days of repo inactivity, and
+# this workflow's own commit resets that clock).
+#
+# The commit lands on main, which triggers Render's auto-deploy.
+# Manual run anytime: repo → Actions → "Refresh puzzle index" → Run workflow.
+name: Refresh puzzle index
+
+on:
+  schedule:
+    - cron: '0 5 3 */2 *'   # 05:00 UTC on the 3rd, every 2nd month
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'   # needs built-in zstd (≥22.15)
+      - name: Rebuild index from the latest Lichess puzzle DB
+        run: node tools/build-puzzle-index.mjs
+      - name: Commit and push if anything changed
+        run: |
+          git add puzzles/
+          if git diff --cached --quiet; then
+            echo "Index unchanged — nothing to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore: refresh puzzle index from latest Lichess DB (automated)
+
+          Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+          git push
