@@ -62,6 +62,14 @@ export ANTHROPIC_API_KEY=sk-ant-...
 4. **Train** — every blunder becomes a puzzle (the position *before* you went wrong; solve
    for the engine's move). **Leitner SRS** with intervals `[0,1,3,7,16,35]` days: right →
    advance a box, wrong → back to box 1 and re-drilled this session.
+   - **Fix this pattern**: after a blunder the app retrieves *structurally similar*
+     positions — same tactical motif, same phase, matched to your level — from a local
+     index of real Lichess puzzles (`puzzles/`, built by `tools/build-puzzle-index.mjs`
+     from the CC0 Lichess puzzle DB): 3 easy ones, 2 harder variants, then your own
+     blunder position as the final test.
+   - **Concept SRS**: each detected pattern (knight fork, discovered attack, pin, skewer,
+     back-rank mate, …) gets its own spaced-repetition clock — the app retests the
+     *concept* with brand-new puzzles ~3 days later, spacing out as you pass.
 5. **Stats** — blunder rate, blunders/mistakes by game phase (opening / middlegame /
    endgame), and a per-game table.
 6. **Coach** — add students, import each student's games (kept separate from yours and
@@ -121,7 +129,9 @@ first visit after a quiet stretch takes ~30–60s to wake.
   key held server-side, cached per position.
 - ~~**Coach view**~~ — **done**: multi-student mode with per-student weakness reports,
   isolated data, and student-scoped drilling. The clearest monetization path.
-- Tactics-theme tagging (fork / pin / back-rank) to power "you keep falling for forks".
-- Rating-adaptive thresholds and puzzle difficulty.
+- ~~Tactics-theme tagging (fork / pin / back-rank)~~ — **done**, plus discovered attack
+  and skewer, and it now powers similar-position retrieval + per-pattern spaced retests.
+- Rating-adaptive thresholds and puzzle difficulty (a light version exists: external
+  puzzle results tune each player's difficulty target).
 - Accounts + cloud sync (replace localStorage) and a real coach↔student handoff (today
   the coach imports on the student's behalf, all in one browser).

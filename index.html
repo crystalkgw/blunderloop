@@ -427,9 +427,10 @@ function cpToPawns(cp){ if(Math.abs(cp)>=MATE-1000){const m=MATE-Math.abs(cp);re
 /* ========================= persistence ===================== */
 let store = load();
 function load(){ try{return JSON.parse(localStorage.getItem(STORE_KEY))||fresh();}catch(e){return fresh();} }
-function fresh(){ return { games:[], puzzles:[], meta:{}, students:[] }; }
+function fresh(){ return { games:[], puzzles:[], meta:{}, students:[], concepts:[] }; }
 function save(){ localStorage.setItem(STORE_KEY, JSON.stringify(store)); scheduleCloudSave(); }
 if(!store.students) store.students=[];
+if(!store.concepts) store.concepts=[];
 // studentId null === "you". Every list-producing view scopes to one profile.
 function gamesFor(sid){ sid=sid||null; return store.games.filter(g=>(g.studentId||null)===sid); }
 function puzzlesFor(sid){ sid=sid||null; return store.puzzles.filter(p=>(p.studentId||null)===sid); }
@@ -644,10 +645,60 @@ function openingOf(sans){
 }
 // tactical-motif tag derived from the engine's punishing reply (never guessed).
 // x: {fenAfter, refutationLineSan, wasMateAfter}
+const PIECE_VAL={p:1,n:3,b:3,r:5,q:9,k:100};
+const RAY_DIRS={ b:[[1,1],[1,-1],[-1,1],[-1,-1]], r:[[1,0],[-1,0],[0,1],[0,-1]] };
+RAY_DIRS.q=RAY_DIRS.b.concat(RAY_DIRS.r);
+// did the reply UNVEIL a slider attack on K/Q/R through the square it vacated?
+function discoveredBy(pos, m){
+  for(let x=0;x<8;x++) for(let y=0;y<8;y++){
+    const s=String.fromCharCode(97+x)+(y+1);
+    const p=pos.get(s);
+    if(!p||p.color!==m.color||!'brq'.includes(p.type)||s===m.to) continue;
+    for(const [dx,dy] of (p.type==='q'?RAY_DIRS.q:RAY_DIRS[p.type])){
+      let crossed=false;
+      for(let cx=x+dx,cy=y+dy; cx>=0&&cx<8&&cy>=0&&cy<8; cx+=dx,cy+=dy){
+        const cs=String.fromCharCode(97+cx)+(cy+1);
+        if(cs===m.from){ crossed=true; continue; }        // the vacated square — was the blocker
+        const q=pos.get(cs);
+        if(!q) continue;
+        if(crossed && q.color!==m.color && 'qrk'.includes(q.type)) return true;
+        break;                                            // first piece ends the ray
+      }
+    }
+  }
+  return false;
+}
+// does the reply slider now hit two enemy pieces on one ray? (front<back = pin, front>back = skewer)
+function pinOrSkewer(pos, m){
+  if(!'brq'.includes(m.piece)) return null;
+  const fx=m.to.charCodeAt(0)-97, ry=+m.to[1]-1;
+  for(const [dx,dy] of (m.piece==='q'?RAY_DIRS.q:RAY_DIRS[m.piece])){
+    let first=null;
+    for(let x=fx+dx,y=ry+dy; x>=0&&x<8&&y>=0&&y<8; x+=dx,y+=dy){
+      const p=pos.get(String.fromCharCode(97+x)+(y+1));
+      if(!p) continue;
+      if(p.color===m.color) break;
+      if(!first){ first=p; continue; }
+      const v1=PIECE_VAL[first.type], v2=PIECE_VAL[p.type];
+      if(v1<v2 && v2>=5) return 'pin';
+      if(v1>v2 && v1>=5) return 'skewer';
+      break;
+    }
+  }
+  return null;
+}
 function tacticThemeOf(x){
   try{
-    if(x.wasMateAfter) return 'mate threat';
     const ref=(x.refutationLineSan||'').split(/\s+/).filter(Boolean);
+    if(x.wasMateAfter){
+      // back-rank mate if the refutation's mating move lands on the 1st/8th rank
+      try{
+        const mc=new Chess(x.fenAfter);
+        for(const s of ref){ const mm=mc.move(s,{sloppy:true}); if(!mm) break;
+          if(mm.san.includes('#')) return (mm.to[1]==='1'||mm.to[1]==='8') ? 'back-rank mate' : 'mate threat'; }
+      }catch(e){}
+      return 'mate threat';
+    }
     if(!ref.length) return null;
     const c=new Chess(x.fenAfter);
     const m=c.move(ref[0],{sloppy:true});
@@ -659,6 +710,8 @@ function tacticThemeOf(x){
     if(flip.fen().split(' ')[0]===f[0]){
       const caps=flip.moves({square:m.to,verbose:true}).filter(v=>v.captured&&v.captured!=='p');
       if(caps.length>=2) return m.piece==='n' ? 'knight fork' : 'double attack';
+      if(discoveredBy(flip,m)) return 'discovered attack';
+      const ps=pinOrSkewer(flip,m); if(ps) return ps;
     }
     if(m.captured==='p') return 'pawn grab';
     if(m.san.includes('+')) return 'exposed king';
@@ -666,8 +719,11 @@ function tacticThemeOf(x){
   }catch(e){ return null; }
 }
 // map our detected patterns to lichess's puzzle-trainer themes (free, endless supply)
-const LICHESS_THEMES={ 'mate threat':'mate', 'hanging queen':'hangingPiece', 'hanging piece':'hangingPiece',
-  'knight fork':'fork', 'double attack':'fork', 'exposed king':'exposedKing', 'pawn grab':'mix' };
+const LICHESS_THEMES={ 'mate threat':'mate', 'back-rank mate':'backRankMate',
+  'hanging queen':'hangingPiece', 'hanging piece':'hangingPiece',
+  'knight fork':'fork', 'double attack':'fork',
+  'discovered attack':'discoveredAttack', 'pin':'pin', 'skewer':'skewer',
+  'exposed king':'exposedKing', 'pawn grab':'mix' };
 const LICHESS_EG={ 'rook endgames':'rookEndgame', 'pawn endgames':'pawnEndgame',
   'queen endgames':'queenEndgame', 'minor-piece endgames':'endgame' };
 function lichessPractice(theme){ const t=LICHESS_THEMES[theme]||LICHESS_EG[theme]; return t?`https://lichess.org/training/${t}`:null; }
@@ -762,6 +818,9 @@ function makePuzzles(game){
     const id=game.id+':'+a.ply;
     if(have.has(id)) continue;
     const opp=game.analysis[a.ply-2];                    // opponent's move just before this position
+    const th=tacticThemeOf(a);
+    // a detected pattern starts its concept clock now: a retest gets scheduled in ~3 days
+    if(th && LICHESS_THEMES[th] && LICHESS_THEMES[th]!=='mix') conceptOf(th, game.studentId||null, true);
     store.puzzles.push({
       id, gameId:game.id, ply:a.ply, fen:a.fenBefore, studentId:game.studentId||null,
       correctSan:a.bestSan, correctUci:a.bestUci, playedSan:a.san,
@@ -769,7 +828,7 @@ function makePuzzles(game){
       oppLastSan: opp? opp.san : null, oppLastUci: opp? moveUci(opp.fenBefore, opp.san) : null,
       oppBestSan: (opp && opp.bestSan && opp.lossCp>=TH.inaccuracy && !playedIsBest(opp)) ? opp.bestSan : null,
       oppLossPawns: (opp && opp.lossCp>=TH.inaccuracy) ? +(opp.lossCp/100).toFixed(1) : null,
-      theme: tacticThemeOf(a),
+      theme: th,
       lossCp:a.lossCp, opponent:game.opponent,
       box:1, dueAt:Date.now(), history:[]
     });
@@ -851,7 +910,8 @@ function mergeStores(local, remote){
   if(!local || !(local.games||[]).length) return remote;
   const uni=(a,b)=>{const m=new Map(); (a||[]).forEach(x=>m.set(x.id,x)); (b||[]).forEach(x=>{ if(!m.has(x.id)) m.set(x.id,x); }); return [...m.values()];};
   return { games:uni(remote.games,local.games), puzzles:uni(remote.puzzles,local.puzzles),
-           students:uni(remote.students,local.students), meta:Object.assign({},local.meta,remote.meta) };
+           students:uni(remote.students,local.students), concepts:uni(remote.concepts,local.concepts),
+           meta:Object.assign({},local.meta,remote.meta) };
 }
 async function adoptCloud(){
   try{
@@ -1527,7 +1587,13 @@ function drawReview(){
       const patt=tacticThemeOf(mv);
       cm.insertAdjacentHTML('beforeend', `<div class="arrowkey"><span class="k-bad"><i></i>You played ${mv.san}</span><span class="k-good"><i></i>Better: ${mv.bestSan}</span>${opp?`<span class="k-opp"><i></i>Opponent: ${opp.san}</span>`:''}${patt?`<span class="muted">pattern: ${patt}</span>`:''}</div>`);
       const pUrl=(patt&&lichessPractice(patt))||'https://lichess.org/training/mix';
-      cm.insertAdjacentHTML('beforeend', `<div class="guessline"><a class="btn sec" style="display:inline-block;text-decoration:none" href="${pUrl}" target="_blank" rel="noopener">🧩 Practice ${patt||'similar tactics'} on Lichess</a></div>`);
+      if(canLadder(patt)){
+        const ownPz=store.puzzles.find(px=>px.gameId===g.id && px.ply===rv.ply)||null;
+        cm.insertAdjacentHTML('beforeend', `<div class="guessline"><button class="btn sec" id="fixPattRv" title="3 easy ${patt} puzzles, 2 harder ones${ownPz?', then this exact position again':''}">🎯 Fix this pattern — 6 puzzles</button> <a class="muted" style="font-size:12px" href="${pUrl}" target="_blank" rel="noopener">endless on lichess ↗</a></div>`);
+        $('#fixPattRv').onclick=()=>buildLadder(patt, ownPz, g.studentId||null);
+      }else{
+        cm.insertAdjacentHTML('beforeend', `<div class="guessline"><a class="btn sec" style="display:inline-block;text-decoration:none" href="${pUrl}" target="_blank" rel="noopener">🧩 Practice ${patt||'similar tactics'} on Lichess</a></div>`);
+      }
       cm.insertAdjacentHTML('beforeend', mv.deepDepth
         ? `<div class="guessline muted" style="font-size:12px">✓ verdict confirmed at depth ${mv.deepDepth}</div>`
         : `<div class="guessline"><button class="btn sec" id="deepBtn" title="Re-check this verdict with a deeper engine search (depth ${DEEP_DEPTH})">🔬 Check deeper</button></div>`);
@@ -1587,11 +1653,14 @@ function renderGamePuzzles(g){
   if(chips.length){
     html+=`<h2 style="font-size:14px;margin:14px 0 6px">🎯 Practice the patterns from this game</h2>`
       + `<div class="row" style="gap:8px;flex-wrap:wrap">`
-      + chips.map(c=>`<a class="btn sec" style="display:inline-block;text-decoration:none" href="${c.u}" target="_blank" rel="noopener" title="Endless ${c.th} puzzles on lichess">${c.th}${c.n>1?` ×${c.n}`:''} ↗</a>`).join('')
+      + chips.map(c=> canLadder(c.th)
+          ? `<button class="btn sec" data-ladder="${c.th}" title="6 fresh ${c.th} puzzles matched to your level">🧩 ${c.th}${c.n>1?` ×${c.n}`:''}</button>`
+          : `<a class="btn sec" style="display:inline-block;text-decoration:none" href="${c.u}" target="_blank" rel="noopener" title="Endless ${c.th} puzzles on lichess">${c.th}${c.n>1?` ×${c.n}`:''} ↗</a>`).join('')
       + `</div>`;
   }
   box.innerHTML=html;
   box.querySelectorAll('.gp-row').forEach(r=>r.onclick=()=>{ rv.ply=+r.dataset.ply; drawReview(); });
+  box.querySelectorAll('[data-ladder]').forEach(b=>b.onclick=()=>buildLadder(b.dataset.ladder, null, g.studentId||null));
   const dg=$('#drillGameBtn'); if(dg) dg.onclick=()=>{ tn.seed=pz.slice(); switchView('train'); };
 }
 $('#rvFirst').onclick=()=>{rv.ply=0;drawReview();};
@@ -1628,7 +1697,7 @@ function renderTrainMeta(){
   const due=pool.filter(p=>p.dueAt<=todayEnd()).length;
   $('#tmDue').textContent=due; $('#tmTotal').textContent=pool.length;
   $('#tmMaster').textContent=pool.filter(p=>p.box>=MAX_BOX).length;
-  const myDue=puzzlesFor(null).filter(p=>p.dueAt<=todayEnd()).length;
+  const myDue=puzzlesFor(null).filter(p=>p.dueAt<=todayEnd()).length + conceptsDue(null).length;
   const badge=$('#dueBadge'); if(myDue){badge.style.display='inline-block';badge.textContent=myDue;}else badge.style.display='none';
   renderLpBar();
   const banner=$('#trainBanner');
@@ -1682,6 +1751,127 @@ async function startLichessSet(slug){
     if(tn.lpRun===myRun){ tn.lpLoading=false; const el=stEl(); if(el) el.textContent=fetched?`${fetched} puzzles loaded ✓`:''; }
   }
 }
+/* ---- similar-position retrieval: static index of real lichess puzzles by motif × rating band.
+   Built by tools/build-puzzle-index.mjs into puzzles/ — after a blunder the app pulls positions
+   that are structurally similar (same motif, same phase, right difficulty) from these shards.
+   Shards keep the raw DB convention: fen is BEFORE the opponent's setup move, moves[0] is that
+   setup move, moves[1..] the solution. ---- */
+const IDX={manifest:undefined, shards:{}};
+async function idxManifest(){
+  if(IDX.manifest!==undefined) return IDX.manifest;
+  try{ const r=await fetch('puzzles/index.json'); IDX.manifest=r.ok? await r.json() : null; }
+  catch(e){ IDX.manifest=null; }
+  return IDX.manifest;
+}
+// display theme -> indexed shard folder (null when the index lacks it → fall back to links)
+function idxAngleOf(theme){
+  const a=LICHESS_THEMES[theme]||LICHESS_EG[theme];
+  return (a && a!=='mix' && IDX.manifest && IDX.manifest.themes[a]) ? a : null;
+}
+function canLadder(theme){ return !!(theme && idxAngleOf(theme)); }
+async function idxShard(angle,band){
+  const key=angle+'/'+band;
+  if(IDX.shards[key]) return IDX.shards[key];
+  try{ const r=await fetch('puzzles/'+key+'.json'); IDX.shards[key]=r.ok? await r.json() : []; }
+  catch(e){ IDX.shards[key]=[]; }
+  return IDX.shards[key];
+}
+// raw DB record -> the same external-puzzle shape fetchLichessPuzzle returns
+function idxToPuzzle(rec, angle, label){
+  try{
+    const c=new Chess(rec.fen);
+    const u=rec.moves[0];
+    const setup=c.move({from:u.slice(0,2),to:u.slice(2,4),promotion:u[4]||'q'});
+    if(!setup) return null;
+    const fen=c.fen(), sol=rec.moves.slice(1);
+    if(!sol.length) return null;
+    const t=new Chess(fen);
+    const first=t.move({from:sol[0].slice(0,2),to:sol[0].slice(2,4),promotion:sol[0][4]||'q'});
+    if(!first) return null;
+    const lineSan=[first.san];
+    for(let i=1;i<sol.length;i++){ const mm=t.move({from:sol[i].slice(0,2),to:sol[i].slice(2,4),promotion:sol[i][4]||'q'}); if(!mm) break; lineSan.push(mm.san); }
+    return { id:'lp_'+rec.id, external:true, lpId:rec.id, angle, fen,
+      correctUci:sol[0], correctSan:first.san, solutionSan:lineSan.join(' '),
+      oppLastSan:setup.san, oppLastUci:u,
+      theme:label||angle, rating:rec.rating,
+      playedSan:null, box:0, dueAt:0, history:[] };
+  }catch(e){ return null; }
+}
+function seenPzList(){ if(!store.meta.seenPz) store.meta.seenPz=[]; return store.meta.seenPz; }
+function markSeen(id){ const s=seenPzList(); if(!s.includes(id)){ s.push(id); if(s.length>400) s.splice(0,s.length-400); } }
+// the retriever: same motif, close in difficulty, same game phase preferred, unseen preferred
+async function similarPuzzles({angle, target, count, label, phase}){
+  if(!(await idxManifest())) return [];
+  const bands=IDX.manifest.bands||[500,800,1100,1400,1700];
+  let band=bands[0]; for(const b of bands) if(target>=b) band=b;
+  let recs=(await idxShard(angle,band)).slice();
+  const bi=bands.indexOf(band);                       // thin shard → widen to neighbor bands
+  if(recs.length<count*4 && bi>0) recs=recs.concat(await idxShard(angle,bands[bi-1]));
+  if(recs.length<count*4 && bi<bands.length-1) recs=recs.concat(await idxShard(angle,bands[bi+1]));
+  const seen=new Set(seenPzList());
+  const scored=recs.map(r=>({r, s: -Math.abs(r.rating-target)
+      + (phase && r.themes && r.themes.includes(phase) ? 120 : 0)
+      - (seen.has(r.id) ? 5000 : 0) + Math.random()*60 }))
+    .sort((a,b)=>b.s-a.s);
+  const out=[];
+  for(const {r} of scored){
+    const p=idxToPuzzle(r, angle, label);
+    if(!p) continue;
+    out.push(p); markSeen(r.id);
+    if(out.length>=count) break;
+  }
+  return out;
+}
+/* ---- the remediation ladder: 3 easy → harder variants → your own blunder position ---- */
+function levelOf(sid){ return (store.meta.lvl||{})[sid||'me'] || 900; }
+function levelAdj(sid, correct){
+  if(!store.meta.lvl) store.meta.lvl={};
+  const k=sid||'me';
+  store.meta.lvl[k]=Math.max(500, Math.min(2000, (store.meta.lvl[k]||900) + (correct?30:-30)));
+}
+async function buildLadder(theme, ownPz, sid){
+  const angle=idxAngleOf(theme);
+  if(!angle) return false;
+  sid=sid||null;
+  const target=levelOf(sid);
+  const phase=ownPz ? phaseOf(ownPz.ply) : null;
+  const easy=await similarPuzzles({angle, target:target-200, count:3, label:theme, phase});
+  const hard=await similarPuzzles({angle, target:target+180, count:ownPz?2:3, label:theme, phase});
+  const set=easy.concat(hard);
+  if(!set.length){ toast('Puzzle index unavailable — streaming from Lichess instead'); tn.profile=sid; switchView('train'); startLichessSet(angle); return true; }
+  if(ownPz) set.push(ownPz);                          // final boss: the actual position from the game
+  save();                                             // persist seenPz
+  tn.profile=sid;
+  tn.seed=set;
+  tn.seedLadder={theme, sid, total:set.length, results:[]};
+  switchView('train');
+  return true;
+}
+/* ---- concept SRS: retest the same pattern days later, with FRESH positions ---- */
+function conceptOf(theme, sid, createIfMissing){
+  sid=sid||null;
+  const id=(sid||'me')+':'+theme;
+  let c=(store.concepts||[]).find(x=>x.id===id);
+  if(!c && createIfMissing){
+    c={id, theme, studentId:sid, box:3, dueAt:Date.now()+INTERVALS[2]*DAY, history:[]};   // first retest in 3 days
+    store.concepts.push(c);
+  }
+  return c;
+}
+function conceptsDue(sid){
+  sid=sid||null;
+  return (store.concepts||[]).filter(c=>(c.studentId||null)===sid && c.dueAt<=todayEnd() && canLadder(c.theme));
+}
+function finishLadder(l){
+  const right=l.results.filter(Boolean).length, total=l.results.length;
+  const pass=total>0 && right/total>=0.8;
+  const c=conceptOf(l.theme, l.sid, true);
+  c.box = pass ? Math.min(MAX_BOX, c.box+1) : 3;      // fail → back to a 3-day retest
+  c.dueAt = Date.now()+INTERVALS[c.box-1]*DAY;
+  c.history.push({at:Date.now(), right, total});
+  save();
+  return { right, total, pass, days:INTERVALS[c.box-1] };
+}
 function renderLpBar(){
   const bar=$('#lpBar'); if(!bar) return;
   const keep=($('#lpStatus')||{}).textContent||'';
@@ -1691,7 +1881,11 @@ function renderLpBar(){
   Object.entries(st.themes).sort((x,y)=>y[1]-x[1]).forEach(([k])=>{ const sl=LICHESS_THEMES[k]; if(sl&&sl!=='mix'&&!slugs[sl]) slugs[sl]=k; });
   Object.entries(st.endgames).sort((x,y)=>y[1]-x[1]).forEach(([k])=>{ const sl=LICHESS_EG[k]; if(sl&&!slugs[sl]) slugs[sl]=k; });
   const btns=Object.entries(slugs).slice(0,4).map(([sl,label])=>`<button class="btn sec" data-lp="${sl}">${label}</button>`).join('');
-  bar.innerHTML=`<div class="row" style="gap:8px;align-items:center;flex-wrap:wrap">
+  const dueC=conceptsDue(tn.profile);
+  const retest=dueC.length ? `<div class="row" style="gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+    <span class="sub" style="margin:0">🔁 Patterns due for a retest:</span>
+    ${dueC.map(c=>`<button class="btn" data-retest="${c.theme}" title="A fresh set of ${c.theme} puzzles — prove the pattern stuck">${c.theme}</button>`).join('')}</div>` : '';
+  bar.innerHTML=retest+`<div class="row" style="gap:8px;align-items:center;flex-wrap:wrap">
     <span class="sub" style="margin:0">🧩 Fresh Lichess puzzles${Object.keys(slugs).length?' on your weak patterns':''}:</span>
     ${btns}<button class="btn sec" data-lp="mix">surprise mix</button>
     <select id="lpCount" title="How many puzzles to fetch"><option value="10">10</option><option value="20">20</option><option value="30">30</option><option value="50">50</option></select>
@@ -1699,9 +1893,11 @@ function renderLpBar(){
   $('#lpCount').value=keepCount;
   const el=$('#lpStatus'); if(el) el.textContent=keep;
   bar.querySelectorAll('[data-lp]').forEach(b=>b.onclick=()=>startLichessSet(b.dataset.lp));
+  bar.querySelectorAll('[data-retest]').forEach(b=>b.onclick=()=>buildLadder(b.dataset.retest, null, tn.profile));
 }
 function startTrain(){
-  if(tn.seed && tn.seed.length){ tn.queue=tn.seed.slice(); tn.seed=null; renderTrainMeta(); nextPuzzle(); return; }
+  if(tn.seed && tn.seed.length){ tn.queue=tn.seed.slice(); tn.seed=null; tn.ladder=tn.seedLadder||null; tn.seedLadder=null; renderTrainMeta(); nextPuzzle(); return; }
+  tn.ladder=null;
   const now=todayEnd(); const pool=puzzlesFor(tn.profile);
   tn.queue=pool.filter(p=>p.dueAt<=now).sort((a,b)=>a.dueAt-b.dueAt || b.lossCp-a.lossCp);
   renderTrainMeta();
@@ -1727,7 +1923,17 @@ function nextPuzzle(){
     $('#trainEmpty').innerHTML='🧩 Fetching more puzzles from Lichess…';
     setTimeout(nextPuzzle, 800); return;
   }
-  if(!tn.cur){ $('#trainActive').style.display='none'; $('#trainEmpty').style.display='block'; $('#trainEmpty').innerHTML='Session complete — nicely done. 🎉'; renderTrainMeta(); return; }
+  if(!tn.cur){
+    $('#trainActive').style.display='none'; $('#trainEmpty').style.display='block';
+    let msg='Session complete — nicely done. 🎉';
+    if(tn.ladder && tn.ladder.results.length){
+      const th=tn.ladder.theme, r=finishLadder(tn.ladder); tn.ladder=null;
+      msg = r.pass
+        ? `🎉 <b>${r.right}/${r.total}</b> on <b>${th}</b> — the pattern is sinking in. I'll test it again in <b>${r.days} day(s)</b> with brand-new puzzles.`
+        : `Set complete: <b>${r.right}/${r.total}</b> on <b>${th}</b>. No worries — patterns take a few rounds. We'll try a fresh set in <b>${r.days} day(s)</b>.`;
+    }
+    $('#trainEmpty').innerHTML=msg; renderTrainMeta(); return;
+  }
   tn.pos=new Chess(tn.cur.fen); tn.sel=null; tn.targets=[]; tn.solved=false; tn.arrows=[];
   tn.orient = tn.pos.turn()==='w'?'white':'black';
   $('#trainSide').textContent=(tn.pos.turn()==='w'?'White':'Black')+' to move — find the best move.';
@@ -1768,6 +1974,8 @@ function tryMove(from,to){
 function grade(correct, mv){
   tn.solved=true; tn.sel=null; tn.targets=[];
   const p=tn.cur;
+  if(tn.ladder) tn.ladder.results.push(!!correct);
+  if(p.external){ levelAdj(tn.profile, correct); save(); }   // external results calibrate the difficulty target
   if(!p.external){
     p.history.push({at:Date.now(),correct});
     if(correct){ p.box=Math.min(MAX_BOX,p.box+1); }
@@ -1805,7 +2013,12 @@ function grade(correct, mv){
   const th = p.theme || (()=>{ try{ const c2=new Chess(p.fen); c2.move(p.playedSan,{sloppy:true}); return tacticThemeOf({fenAfter:c2.fen(), refutationLineSan:p.refutationLineSan, wasMateAfter:p.mateAfter}); }catch(e){ return null; } })();
   flash.insertAdjacentHTML('beforeend', `<div class="arrowkey"><span class="k-good"><i></i>Best: ${p.correctSan}</span><span class="k-bad"><i></i>Game move: ${p.playedSan}</span>${p.oppLastSan?`<span class="k-opp"><i></i>Opponent: ${p.oppLastSan}</span>`:''}${th?`<span class="muted">pattern: ${th}</span>`:''}</div>`);
   const thUrl=p.external?`https://lichess.org/training/${p.angle||'mix'}`:((th&&lichessPractice(th))||'https://lichess.org/training/mix');
-  flash.insertAdjacentHTML('beforeend', `<div class="guessline"><a class="btn sec" style="display:inline-block;text-decoration:none" href="${thUrl}" target="_blank" rel="noopener">🧩 Practice ${th||'similar tactics'} on Lichess</a></div>`);
+  if(!p.external && canLadder(th)){
+    flash.insertAdjacentHTML('beforeend', `<div class="guessline"><button class="btn sec" id="fixPattTn">🎯 Fix this pattern — 6 puzzles</button> <a class="muted" style="font-size:12px" href="${thUrl}" target="_blank" rel="noopener">endless on lichess ↗</a></div>`);
+    $('#fixPattTn').onclick=()=>buildLadder(th, p, tn.profile);
+  }else{
+    flash.insertAdjacentHTML('beforeend', `<div class="guessline"><a class="btn sec" style="display:inline-block;text-decoration:none" href="${thUrl}" target="_blank" rel="noopener">🧩 Practice ${th||'similar tactics'} on Lichess</a></div>`);
+  }
   if(!p.external) attachAI(flash, tn.cur, ()=>aiPayloadForPuzzle(tn.cur));
   $('#trainNext').style.display='block';
 }
@@ -2051,6 +2264,7 @@ if(store.meta.lichessUser) $('#lcUser').value=store.meta.lichessUser;
 if(store.meta.lichessToken) $('#lcToken').value=store.meta.lichessToken;
 if(store.meta.chesscomUser) $('#ccUser').value=store.meta.chesscomUser;
 renderGames(); renderTrainMeta(); checkLLM(); setSoundBtn(); applyEngineVis();
+idxManifest().then(m=>{ if(m){ renderTrainMeta(); if(rv.game) drawReview(); } });   // ladder buttons appear once the index is known
 </script>
 </body>
 </html>
