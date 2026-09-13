@@ -402,6 +402,21 @@
     </div>
   </div>
 </div>
+<div id="reflectModal" style="display:none;position:fixed;inset:0;background:rgba(5,8,18,.86);z-index:70;align-items:center;justify-content:center">
+  <div class="card" style="width:min(520px,94vw);max-height:92vh;overflow:auto">
+    <div class="row" style="align-items:baseline;gap:10px">
+      <h2 style="margin:0">🪞 Reflect first</h2>
+      <span id="rfDots" class="muted" style="font-size:12px"></span>
+      <a href="#" id="rfSkip" class="muted" style="margin-left:auto;font-size:12px">Skip this time</a>
+    </div>
+    <p class="sub" style="margin:4px 0 14px">Your read of the game — <b>before</b> the engine's. ~1 minute.</p>
+    <div id="rfBody"></div>
+    <div class="row" style="margin-top:14px;align-items:center">
+      <a href="#" id="rfBack" class="muted" style="font-size:12px;display:none">← Back</a>
+      <span class="muted" style="margin-left:auto;font-size:11px;letter-spacing:.4px">Reflect → Reveal → Practice → Replay</span>
+    </div>
+  </div>
+</div>
 <div class="toast" id="toast"></div>
 
 <script type="module">
@@ -1622,6 +1637,8 @@ function openReview(id){
   if(g.structure) $('#reviewMeta').title=g.structure.tip;
   rp=null;                                             // switching games always leaves replay mode
   drawReview();
+  // Reflect → Reveal: reconstruct your own thinking before the engine shows anything
+  if(g.analysis && !g.reflection && !g._rfDismissed) openReflect(g);
 }
 function drawReview(){
   if(rp){ drawReplay(); return; }                      // replay mode owns the board until ⏹
@@ -1798,7 +1815,9 @@ function renderGamePuzzles(g){
     if(fl.lostFromWinning) sent.push(`You were <b>winning</b> at one point — holding an advantage to the end is the skill to train.`);
     if(fl.topPhase) sent.push(`Most slips came in the <b>${fl.topPhase}</b>.`);
     const escAttr=s=>String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+    const rfOut=reflectionVsEngine(g);
     html+=`<h2 style="font-size:14px;margin:0 0 6px">📈 This game's story</h2>
+      ${rfOut?`<div style="font-size:13px;line-height:1.7;border:1px solid var(--line);border-radius:10px;padding:9px 11px;margin:0 0 8px"><b>🪞 Your read → 🔍 the engine</b><br>${rfOut.join('<br>')}</div>`:''}
       <div style="font-size:13px;line-height:1.6">${sent.join(' ')}</div>
       ${fl.root?`<div class="row" style="gap:8px;margin:8px 0;flex-wrap:wrap"><button class="btn" id="storyReplay">▶ Replay the turning point — can you save it?</button></div>`:''}
       <div id="storyAI" style="margin:8px 0"></div>
@@ -1865,6 +1884,115 @@ function onReviewSquare(name){
   if(piece && piece.color===mv.mover){ rv.sel=name; rv.targets=pos.moves({square:name,verbose:true}).map(m=>m.to); }
   else{ rv.sel=null; rv.targets=[]; }
   drawReview();
+}
+
+/* ========================= REFLECT (before the engine speaks) ======== */
+// BlunderLoop Reflect: the player reconstructs their own thinking FIRST, so the
+// Reveal can show the gap between perceived cause and actual cause.
+const RF_KID=[
+  {k:'myPlan',  q:'What were you trying to do in this game?', chips:['attack the king','grab pieces','stay safe','push my pawns',"I'm not sure"]},
+  {k:'oppPlan', q:'What was your opponent trying to do?', chips:['attack my king','grab my pieces','control the center','push pawns','no idea']},
+  {k:'pieceTrouble', q:'Which of your pieces was in the most trouble?', chips:['♛ queen','♜ rook','♝ bishop','♞ knight','♟ pawns','👑 king','not sure']},
+  {k:'movePly', q:'Which move would you like to take back?', moves:true},
+];
+const RF_STD=[
+  {k:'phase',   q:'Where did the game start to go wrong?', chips:['opening','middlegame','endgame','not sure']},
+  {k:'movePly', q:'Which move are you least happy with?', moves:true},
+  {k:'plan',    q:'What was your plan at that moment?', chips:['attack','improve a piece','defend','trade pieces','push a pawn / gain space',"I didn't really have a plan",'other']},
+  {k:'oppPlan', q:'What was your opponent trying to do?', text:true},
+  {k:'reason',  q:'What was the main reason you got into trouble?', chips:['missed tactic','ignored opponent threat','poor king safety','bad piece placement','wrong plan','weak pawn structure','time pressure','not sure']},
+  {k:'expected', q:"Before your opponent's strongest move, what did you expect them to play?", text:true},
+];
+let RF=null;
+const escT=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function openReflect(g){
+  RF={g, steps: engineDetails()?RF_STD:RF_KID, mode: engineDetails()?'std':'kid', idx:0, answers:{}};
+  $('#reflectModal').style.display='flex';
+  rfRender();
+}
+function rfClose(){ $('#reflectModal').style.display='none'; RF=null; }
+function rfRender(){
+  const st=RF.steps[RF.idx];
+  $('#rfDots').textContent=RF.steps.map((_,i)=>i<RF.idx?'●':i===RF.idx?'◉':'○').join(' ');
+  $('#rfBack').style.display=RF.idx>0?'':'none';
+  const body=$('#rfBody');
+  let h=`<h2 style="font-size:15px;margin:0 0 10px">${st.q}</h2>`;
+  const chipCss='font-size:13px;padding:8px 12px;border-radius:16px;border:1px solid var(--line);background:transparent;color:inherit;cursor:pointer';
+  if(st.chips){
+    h+=`<div style="display:flex;gap:8px;flex-wrap:wrap">`+st.chips.map(c=>`<button class="rfchip" data-v="${escT(c)}" style="${chipCss}">${c}</button>`).join('')+`</div>`;
+  }else if(st.moves){
+    h+=`<div style="max-height:190px;overflow:auto;line-height:2;font-size:13px;border:1px solid var(--line);border-radius:10px;padding:8px 10px">`;
+    RF.g.analysis.forEach((a,i)=>{
+      if(i%2===0) h+=`<span class="muted" style="margin-right:2px">${i/2+1}.</span>`;
+      h+= a.isUser ? `<button class="rfmv" data-ply="${a.ply}" style="font:inherit;padding:1px 6px;border-radius:6px;border:1px solid var(--line);background:transparent;color:inherit;cursor:pointer;margin-right:4px">${a.san}</button>`
+                   : `<span style="margin-right:8px">${a.san}</span>`;
+    });
+    h+=`</div><div style="margin-top:8px"><button class="rfchip" data-v="" style="${chipCss}">not sure</button></div>`;
+  }else{ // free text, optional
+    h+=`<input id="rfText" placeholder="a few words — or leave empty" autocomplete="off" style="width:100%"/>
+        <div style="margin-top:10px"><button class="btn" id="rfNext">Continue</button></div>`;
+  }
+  body.innerHTML=h;
+  body.querySelectorAll('.rfchip').forEach(b=>b.onclick=()=>rfAnswer(st.k, b.dataset.v));
+  body.querySelectorAll('.rfmv').forEach(b=>b.onclick=()=>rfAnswer(st.k, +b.dataset.ply));
+  const nx=$('#rfNext'); if(nx) nx.onclick=()=>rfAnswer(st.k, ($('#rfText').value||'').trim());
+  const tx=$('#rfText'); if(tx){ tx.focus(); tx.addEventListener('keydown',e=>{ if(e.key==='Enter') nx.click(); }); }
+}
+function rfAnswer(key, val){
+  if(val!=='' && val!==undefined && val!==null) RF.answers[key]=val;
+  RF.idx++;
+  if(RF.idx>=RF.steps.length){
+    RF.g.reflection={ver:1, mode:RF.mode, answers:RF.answers, at:Date.now()};
+    const g=RF.g; rfClose(); save();
+    toast('🪞 Saved — now the Reveal');
+    if(rv.game===g) drawReview();
+    return;
+  }
+  rfRender();
+}
+$('#rfBack').onclick=e=>{ e.preventDefault(); if(RF&&RF.idx>0){ RF.idx--; rfRender(); } };
+$('#rfSkip').onclick=e=>{ e.preventDefault(); if(!RF) return; RF.g.reflection={skipped:true, at:Date.now()}; const g=RF.g; rfClose(); save(); if(rv.game===g) drawReview(); };
+$('#reflectModal').addEventListener('click',e=>{ if(e.target===$('#reflectModal')&&RF){ RF.g._rfDismissed=true; rfClose(); } });
+document.addEventListener('keydown',e=>{ if(e.key==='Escape'&&RF){ RF.g._rfDismissed=true; rfClose(); } });
+/* ---- the Reveal: your read vs the engine ---- */
+function rfCauseMap(reason){
+  return {'missed tactic':'a missed tactic','ignored opponent threat':'ignored a threat','poor king safety':'king safety',
+    'bad piece placement':'a positional slide','wrong plan':'a positional slide','weak pawn structure':'a positional slide'}[reason]||null;
+}
+function rootCauseOf(anchor){
+  const te=thinkingErrorOf(anchor);
+  return te || (mistakeKind(anchor)==='positional' ? 'a positional slide' : 'a missed tactic');
+}
+function reflectionVsEngine(g){
+  const r=g.reflection; if(!r||r.skipped) return null;
+  const fl=gameFlow(g); if(!fl) return null;
+  const A=r.answers||{}, out=[];
+  const anchor=fl.root||fl.worst||fl.finalB;
+  const jump=x=>`<a href="#" class="story-jump" data-ply="${x.ply}"><b>move ${mvNoOf(x.ply)} (${x.san})</b></a>`;
+  if(r.mode==='kid' && (A.myPlan||A.oppPlan))
+    out.push(`Your read: you were trying to <b>${escT(A.myPlan||'…')}</b>; they were trying to <b>${escT(A.oppPlan||'…')}</b>.`);
+  if(A.movePly && anchor){
+    out.push(+A.movePly===anchor.ply
+      ? `🎯 You called it — you pointed at ${jump(anchor)}, and the engine agrees that's where the story turned.`
+      : `You pointed at <a href="#" class="story-jump" data-ply="${A.movePly}"><b>move ${mvNoOf(+A.movePly)}${g.analysis[A.movePly-1]?` (${g.analysis[A.movePly-1].san})`:''}</b></a> — the engine says the damage started at ${jump(anchor)}. <b>That gap is the lesson.</b>`);
+  }else if(A.phase && fl.root){
+    const ph=phaseOf(fl.root.ply);
+    out.push(A.phase===ph ? `🎯 You felt it went wrong in the <b>${ph}</b> — the engine agrees: it turned at ${jump(fl.root)}.`
+      : A.phase==='not sure' ? `The engine's answer: it turned in the <b>${ph}</b>, at ${jump(fl.root)}.`
+      : `You said <b>${escT(A.phase)}</b> — the engine puts the turn in the <b>${ph}</b>, at ${jump(fl.root)}.`);
+  }
+  if(anchor && A.reason && !['time pressure','not sure'].includes(A.reason)){
+    const guess=rfCauseMap(A.reason), actual=rootCauseOf(anchor);
+    out.push(guess===actual
+      ? `🎯 And you named the cause: <b>${escT(A.reason)}</b> — the engine sees it the same way.`
+      : `You blamed <b>${escT(A.reason)}</b>; the engine's read is <b>${actual}</b>${THINK_HABIT[actual]?` — habit: ${THINK_HABIT[actual]}`:''}.`);
+  }
+  if(anchor){
+    const ref=(anchor.refutationLineSan||'').split(/\s+/)[0];
+    if(A.expected && ref) out.push(`You expected <b>${escT(A.expected)}</b> — what actually came was <b>${ref}</b>.`);
+    else if(A.oppPlan && r.mode==='std') out.push(`Your read of their plan: “${escT(A.oppPlan)}”.`);
+  }
+  return out.length?out:null;
 }
 
 /* ========================= REPLAY the turning point ======== */
@@ -2288,10 +2416,27 @@ function statsFor(sid){
   const phases={opening:{b:0,m:0},middlegame:{b:0,m:0},endgame:{b:0,m:0}};
   const themes={}, endgames={}, te={}, structs={};
   let winHad=0, winConverted=0;
+  const rf={phaseRight:0,phaseTotal:0,causeRight:0,causeTotal:0,saidTacticWasPos:0,saidPosWasTactic:0};
   for(const g of analyzed){
     const fl=gameFlow(g);
     if(fl&&fl.wasWinning){ winHad++; if(g.result==='win') winConverted++; }
     if(g.structure) structs[g.structure.name]=(structs[g.structure.name]||0)+1;
+    // self-awareness: how well did the player's own reflection match the engine's read?
+    const r=g.reflection, anchor=fl&&(fl.root||fl.worst);
+    if(r&&!r.skipped&&anchor){
+      const A=r.answers||{};
+      const guessedPh = A.movePly ? phaseOf(+A.movePly) : (A.phase!=='not sure'?A.phase:null);
+      if(guessedPh){ rf.phaseTotal++; if(guessedPh===phaseOf(anchor.ply)) rf.phaseRight++; }
+      if(A.reason && !['time pressure','not sure'].includes(A.reason)){
+        rf.causeTotal++;
+        const guess=rfCauseMap(A.reason), actual=rootCauseOf(anchor);
+        if(guess===actual) rf.causeRight++;
+        const saidTactic=['missed tactic','ignored opponent threat','poor king safety'].includes(A.reason);
+        const wasTactic=mistakeKind(anchor)==='tactical';
+        if(saidTactic&&!wasTactic) rf.saidTacticWasPos++;
+        if(!saidTactic&&wasTactic) rf.saidPosWasTactic++;
+      }
+    }
   }
   for(const g of analyzed) for(const a of g.analysis){ if(!a.isUser)continue; userMoves++;
     const ph=phaseOf(a.ply);
@@ -2303,7 +2448,7 @@ function statsFor(sid){
     } }
   const pz=puzzlesFor(sid);
   return {analyzed, userMoves, blunders, mistakes, inacc, phases, themes, endgames,
-    te, structs, winHad, winConverted,
+    te, structs, winHad, winConverted, rf,
     rate: userMoves?(blunders/userMoves*100).toFixed(1):'0',
     mastered: pz.filter(p=>p.box>=MAX_BOX).length, totalPuzzles: pz.length,
     due: pz.filter(p=>p.dueAt<=todayEnd()).length };
@@ -2373,6 +2518,10 @@ function renderStats(){
     if(s.winHad) rows.push(`Winning positions: converted <b>${s.winConverted} of ${s.winHad}</b>${s.winConverted<s.winHad?' — holding an advantage to the end is a skill of its own.':' — great converting!'}`);
     const st=Object.entries(s.structs).sort((x,y)=>y[1]-x[1]).map(([k,v])=>`${k}${v>1?` ×${v}`:''}`).join(' · ');
     if(st) rows.push(`Structures you keep reaching: ${st} — learn each one's standard plan and you'll never feel lost there.`);
+    if(s.rf.phaseTotal) rows.push(`🪞 Self-read: you placed the turning point in the right phase in <b>${s.rf.phaseRight} of ${s.rf.phaseTotal}</b> reflections — noticing it earlier is half the battle.`);
+    if(s.rf.causeTotal) rows.push(`🪞 Cause-read: your named cause matched the engine's in <b>${s.rf.causeRight} of ${s.rf.causeTotal}</b>.`);
+    if(s.rf.saidTacticWasPos>=2) rows.push(`You tend to blame missed tactics, but your games usually start slipping <b>positionally</b> — piece activity before fireworks.`);
+    if(s.rf.saidPosWasTactic>=2) rows.push(`You often look for strategic causes, but your games usually turn on <b>concrete tactics</b> — sharpen the Safe? check.`);
     tp.innerHTML = rows.length ? `<div class="card"><h2 style="margin:0 0 4px">🧠 Thinking profile</h2>
       <p class="sub" style="margin:0 0 8px">Not just what went wrong — the thinking habits behind it.</p>
       <div style="font-size:13px;line-height:1.9">${rows.map(r=>'• '+r).join('<br>')}</div></div>` : '';
@@ -2499,7 +2648,8 @@ function renderCoachSummary(container, sid, s){
       .map(p=>({playedSan:p.playedSan,correctSan:p.correctSan,lossCp:p.lossCp,phase:phaseOf(p.ply)}));
     const payload={ sid, name:studentName(sid), rate:s.rate, blunders,
       phases:{opening:s.phases.opening.b, middlegame:s.phases.middlegame.b, endgame:s.phases.endgame.b},
-      thinkErrs:s.te, conversion:s.winHad?{had:s.winHad,won:s.winConverted}:null };
+      thinkErrs:s.te, conversion:s.winHad?{had:s.winHad,won:s.winConverted}:null,
+      reflect:(s.rf.phaseTotal||s.rf.causeTotal)?{phaseRight:s.rf.phaseRight,phaseTotal:s.rf.phaseTotal,causeRight:s.rf.causeRight,causeTotal:s.rf.causeTotal}:null };
     try{ const full=await streamSSE('/api/coach-summary', payload, t=>{tEl.textContent=t;}); card.classList.remove('streaming'); tEl.textContent=full; student.summary=full; save(); }
     catch(e){ container.innerHTML=''; container.appendChild(btn); toast('AI: '+e.message); }
   };

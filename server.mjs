@@ -260,6 +260,7 @@ You are given the student's blunder rate, how their blunders split across game p
 Base your summary ONLY on those facts. Identify the 2–3 recurring patterns you actually see (e.g. hangs pieces in the middlegame, misses opponent threats, drops material to knight forks, weak in the opening).
 The student is being taught the 3-Check they run every move — "Why?" (spot the opponent's threat), "Me?" (give each move a job), "Safe?" (don't hand over a free piece). For each pattern, say which of these three checks the student most needs to lean on, and give one concrete piece of practice advice.
 If you are given thinking-error counts (e.g. how often the opponent's threat was already on the board, or a piece was moved onto an attacked square) or where their games tend to turn, describe the student's recurring FLOW — when and why their positions start to slide — and recommend ONE thinking habit to train (such as asking "What changed?" after every opponent move), not just a list of blunder types.
+If you are given the student's SELF-READ numbers (how often their own post-game reflection matched the engine's turning point and cause), comment on their self-awareness in one sentence: praise an accurate self-read, or gently note the gap and what they tend to misjudge.
 Write 3–5 short sentences of plain prose addressed to the coach ("Your student…"). No headers, no bullet lists, no engine jargon.`;
 
 function buildSummaryText(b){
@@ -274,6 +275,7 @@ function buildSummaryText(b){
     lines.push(`Thinking errors behind their flagged moves (derived from the board): ` +
       Object.entries(b.thinkErrs).map(([k,v])=>`${k} ×${v}`).join(', ') + '.');
   if (b.conversion) lines.push(`Winning positions: converted ${b.conversion.won} of ${b.conversion.had}.`);
+  if (b.reflect) lines.push(`Self-read (their own reflections vs the engine): turning point right in ${b.reflect.phaseRight} of ${b.reflect.phaseTotal}, cause right in ${b.reflect.causeRight} of ${b.reflect.causeTotal}.`);
   lines.push('', 'Summarize their recurring weaknesses and give concrete, actionable advice.');
   return lines.join('\n');
 }

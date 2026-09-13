@@ -59,6 +59,10 @@ export ANTHROPIC_API_KEY=sk-ant-...
    centipawn loss per move, and tags **blunder ≥3.0 / mistake ≥1.2 / inaccuracy ≥0.5**.
 3. **Review** — step through the loss on an interactive board with an eval bar, a
    colour-coded move list (`??`/`?`/`?!`), and a plain-language note on each mistake.
+   - **BlunderLoop Reflect** (Reflect → Reveal → Practice → Replay): before the engine
+     shows anything, 4–6 quick questions make you reconstruct your own thinking — then
+     the reveal compares your read with the engine's ("you blamed move 21; the game
+     turned at move 16"). Your self-read accuracy accrues in the Stats thinking profile.
 4. **Train** — every blunder becomes a puzzle (the position *before* you went wrong; solve
    for the engine's move). **Leitner SRS** with intervals `[0,1,3,7,16,35]` days: right →
    advance a box, wrong → back to box 1 and re-drilled this session.
