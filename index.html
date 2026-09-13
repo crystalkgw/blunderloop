@@ -144,7 +144,7 @@
 <div class="app">
   <header class="top">
     <div class="logo"><b>Blunder</b>loop</div>
-    <div class="tag">Train on the mistakes you actually make.</div>
+    <div class="tag">Don't just fix the move. Fix the thinking.</div>
     <div id="acctBar" style="display:none;margin-left:auto;align-items:center;gap:8px;font-size:13px">
       <span id="acctIn" style="display:none;align-items:center;gap:8px">
         <span>👤 <b id="acctName"></b></span><span id="acctPlan" class="muted"></span><span id="syncDot" class="muted"></span>
@@ -166,6 +166,7 @@
 
   <!-- IMPORT -->
   <section class="view active" id="view-import">
+    <div id="todayCard"></div>
     <div class="card">
       <h2>1 · Import your games</h2>
       <p class="sub">Pulls your games (wins, losses, and draws) from a public account or pasted PGN, and de-dupes. Everything stays in your browser.</p>
@@ -330,6 +331,7 @@
       <h2>Per-game breakdown</h2>
       <div id="statTable"></div>
     </div>
+    <div id="thinkProfile"></div>
     <div id="adminPanel"></div>
   </section>
 
@@ -736,6 +738,100 @@ function endgameTypeOf(fen){
   if(n('b')+n('n')) return 'minor-piece endgames';
   return 'pawn endgames';
 }
+/* ---- pawn-structure recognition: read the board's "terrain" (Ma Bing article) ---- */
+function structureOf(fen){
+  try{
+    const board=(fen||'').split(' ')[0]; if(!board) return null;
+    const wp=[], bp=[];                             // pawn coordinates {f:0-7, r:1-8}
+    let f=0, r=8;
+    for(const ch of board){
+      if(ch==='/'){ r--; f=0; continue; }
+      if(/\d/.test(ch)){ f+=+ch; continue; }
+      if(ch==='P') wp.push({f, r}); else if(ch==='p') bp.push({f, r});
+      f++;
+    }
+    const has=(arr,file)=>arr.some(p=>p.f===file);
+    const at=(arr,file,rank)=>arr.some(p=>p.f===file&&p.r===rank);
+    const onFile=(arr,file)=>arr.filter(p=>p.f===file);
+    const C=2,D=3,E=4,B=1;
+    // locked chain (French / King's-Indian style): play goes to the wings
+    if((at(wp,D,4)&&at(wp,E,5)&&at(bp,D,5)&&at(bp,E,6)) || (at(wp,E,4)&&at(wp,D,5)&&at(bp,E,5)&&at(bp,D,6)))
+      return {name:'locked pawn chain', tip:'The center is closed, so play happens on the wings: attack the chain at its base, and grab space on the side where your pawns point.'};
+    // Carlsbad (QGD-exchange type): minority attack vs kingside play
+    if((at(wp,D,4)&&!has(wp,C)&&at(bp,D,5)&&!has(bp,E)) || (at(bp,D,5)&&!has(bp,C)&&at(wp,D,4)&&!has(wp,E)))
+      return {name:'Carlsbad structure', tip:'Carlsbad structure: the classic plans are the queenside pawn storm (minority attack) or a kingside attack — pick one plan and follow it.'};
+    // hanging pawns: c+d side-by-side with no b/e support
+    for(const [own,fwd] of [[wp,1],[bp,-1]]){
+      const cs=onFile(own,C), ds=onFile(own,D);
+      if(cs.length===1&&ds.length===1&&!has(own,B)&&!has(own,E)
+         && (fwd===1? cs[0].r>=4&&ds[0].r>=4 : cs[0].r<=5&&ds[0].r<=5)
+         && Math.abs(cs[0].r-ds[0].r)<=1)
+        return {name:'hanging pawns', tip:'Two side-by-side pawns with no neighbors: strong while they control the center — but once one advances, the squares around them weaken. Stay flexible.'};
+    }
+    // IQP: a lone d-pawn with no c- or e-pawn of its own
+    for(const own of [wp,bp]){
+      if(onFile(own,D).length===1&&!has(own,C)&&!has(own,E))
+        return {name:'isolated queen’s pawn (IQP)', tip:'A lone d-pawn: the square in front of it is a perfect outpost for your pieces — but trade too many pieces and the pawn becomes an endgame weakness.'};
+    }
+    return null;
+  }catch(e){ return null; }
+}
+/* ---- thinking-error diagnosis: the habit behind the mistake, geometry-verified ---- */
+const THINK_HABIT={
+  'ignored a threat':'after every opponent move, ask: What changed?',
+  'moved into danger':'before you let go of a piece, run Safe? — who attacks that square?',
+  'king safety':'check your own king first — plans only work when the king is safe.' };
+function thinkingErrorOf(a){
+  try{
+    if(a.wasMateAfter) return 'king safety';
+    const ref=(a.refutationLineSan||'').split(/\s+/).filter(Boolean);
+    if(!ref.length) return null;
+    const c=new Chess(a.fenAfter);
+    const m=c.move(ref[0],{sloppy:true});
+    if(!m) return null;
+    if(m.captured){
+      // was this exact capture ALREADY available before the player's move? → the threat was on the board
+      const f=a.fenBefore.split(' '); f[1]=f[1]==='w'?'b':'w'; f[3]='-';
+      const pre=new Chess(f.join(' '));
+      if(pre.fen().split(' ')[0]===f[0]
+         && pre.moves({verbose:true}).some(v=>v.from===m.from&&v.to===m.to&&v.captured===m.captured))
+        return 'ignored a threat';
+      // or does the refutation take the very piece the player just moved?
+      const played=new Chess(a.fenBefore).move(a.san,{sloppy:true});
+      if(played && m.to===played.to) return 'moved into danger';
+      return null;
+    }
+    const th=tacticThemeOf(a);
+    return (th==='back-rank mate'||th==='exposed king'||th==='mate threat') ? 'king safety' : null;
+  }catch(e){ return null; }
+}
+/* ---- game flow: the story of the game — root cause vs final blunder ---- */
+function gameFlow(g){
+  const a=g.analysis; if(!a||!a.length) return null;
+  const sign=g.userColor==='white'?1:-1;
+  const ev=i=> sign*Math.max(-2000,Math.min(2000,a[i].evalAfterCp));   // user perspective, clamped
+  let wasWinning=false, lastOk=-1, worst=null;
+  for(let i=0;i<a.length;i++){
+    if(ev(i)>=150) wasWinning=true;
+    if(ev(i)>=-75) lastOk=i;
+    if(a[i].isUser && isUserMistake(a[i]) && (!worst||a[i].lossCp>worst.lossCp)) worst=a[i];
+  }
+  // root cause: the first flagged user move from which the eval never recovered
+  let root=null;
+  if(ev(a.length-1)<=-150 && lastOk<a.length-1){
+    for(let i=Math.max(0,lastOk); i<a.length; i++){ const x=a[i]; if(x.isUser&&isUserMistake(x)){ root=x; break; } }
+    if(!root) for(let i=lastOk;i>=0;i--){ const x=a[i]; if(x.isUser&&isUserMistake(x)){ root=x; break; } }
+  }
+  const blunders=a.filter(x=>x.isUser&&x.tag==='blunder'&&!playedIsBest(x));
+  const finalB=blunders.length?blunders[blunders.length-1]:null;
+  const phases={opening:0,middlegame:0,endgame:0};
+  for(const x of a) if(x.isUser&&isUserMistake(x)) phases[phaseOf(x.ply)]++;
+  const topPhase=Object.entries(phases).sort((p,q)=>q[1]-p[1])[0];
+  return { root, finalB, worst, wasWinning,
+    lostFromWinning: wasWinning && g.result==='loss',
+    topPhase: topPhase&&topPhase[1]>0 ? topPhase[0] : null, phases };
+}
+const mvNoOf=ply=>Math.floor((ply-1)/2)+1;
 function uciLineToSan(fen, uciArr, maxPlies){
   if(!uciArr||!uciArr.length) return '';
   const c=new Chess(fen); const out=[];
@@ -806,6 +902,7 @@ async function analyzeGame(game, onProgress){
     if(onProgress) onProgress(1);                       // keep the bar pinned while verifying
   }
   game.analysis=analysis; game.analyzedAt=Date.now();
+  game.structure=structureOf(fens[Math.min(24,n)])||null;   // the middlegame's terrain
   makePuzzles(game);
   save();
 }
@@ -1050,7 +1147,7 @@ async function streamSSE(url, payload, onDelta){
   return full.trim();
 }
 // bump when the coach's output format changes so stale-format cached cards regenerate.
-const COMMENTARY_VER = 7;
+const COMMENTARY_VER = 8;
 // Render the coach's "Why? / Me? / Safe?" checklist: escape, then badge the leading check word.
 function coachHTML(text){
   const esc=s=>s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
@@ -1087,6 +1184,8 @@ function aiPayloadForMove(a, opp){
     gameId: rv.game ? rv.game.id : null,
     kind:mistakeKind(a), phase, tag:a.tag,
     openingName:(phase==='opening' && rv.book)?rv.book.name:null,
+    structureName:(phase!=='opening' && rv.game && rv.game.structure)?rv.game.structure.name:null,
+    thinkingError:thinkingErrorOf(a),
     // opening: no engine main line — the coach teaches principles, not lines to memorize
     bestSan:a.bestSan, bestUci:a.bestUci, bestLineSan:(phase==='opening'?null:a.bestLineSan), refutationLineSan:a.refutationLineSan, lossCp:a.lossCp, mateAfter:a.wasMateAfter,
     oppLastSan: opp? opp.san : null,
@@ -1516,11 +1615,16 @@ function openReview(id){
   $('#reviewPicker').value=id;
   $('#reviewTitle').textContent=`${g.userColor} vs ${g.opponent}`;
   const resWord=g.result==='win'?'won':g.result==='loss'?'lost':g.result==='draw'?'drew':'played';
+  if(g.structure===undefined && g.analysis){ const mid=g.analysis[Math.min(23,g.analysis.length-1)]; g.structure=structureOf(mid.fenAfter)||null; }  // older games: recognize lazily
   $('#reviewMeta').textContent=`${g.date||''} · ${g.source} · ${g.sanMoves.length} moves · ${resWord} as ${g.userColor}`
-    + (rv.book?` · 📖 ${rv.book.name} (${rv.book.eco})`:'');
+    + (rv.book?` · 📖 ${rv.book.name} (${rv.book.eco})`:'')
+    + (g.structure?` · ⛰ ${g.structure.name}`:'');
+  if(g.structure) $('#reviewMeta').title=g.structure.tip;
+  rp=null;                                             // switching games always leaves replay mode
   drawReview();
 }
 function drawReview(){
+  if(rp){ drawReplay(); return; }                      // replay mode owns the board until ⏹
   const g=rv.game; if(!g) return;
   const a=g.analysis;
   const mv = rv.ply>0 ? a[rv.ply-1] : null;
@@ -1569,10 +1673,16 @@ function drawReview(){
   // commentary about the move just played (rv.ply-1)
   if(rv.ply===0){ cm.innerHTML='<span class="lead ok">Start</span><div>Step forward to walk the game. Your blunders are marked in the move list.</div>'; }
   else if(gated){
-    cm.innerHTML=`<div class="think"><span class="tlead">🤔 Think first</span>`
-      +(opp?`Your opponent just played <code class="mini">${opp.san}</code> (amber arrow). Ask the checklist: <b>Why?</b> — what is it threatening? `:'')
-      +`Your move here didn't work out. Before the engine speaks, find a better one — <b>try a move on the board</b>.`
+    // the Four-Questions scan (Ma Bing): tap each as you check it — then try a move
+    const qs=[ opp?`1️⃣ What does <code class="mini">${opp.san}</code> want?`:'1️⃣ What does their last move want?',
+      '2️⃣ My worst piece?', '3️⃣ The key square or file?', '4️⃣ My 3–5-move plan?' ];
+    cm.innerHTML=`<div class="think"><span class="tlead">🤔 Think first — run the scan</span>`
+      +`<div style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0">`
+      + qs.map((q,i)=>`<button class="scanq" data-q="${i}" style="font-size:12px;padding:5px 9px;border-radius:14px;border:1px solid var(--line);background:transparent;color:inherit;cursor:pointer">${q}</button>`).join('')
+      +`</div>Your move here didn't work out. Before the engine speaks, find a better one — <b>try a move on the board</b>.`
       +`<div class="guessline"><button class="btn sec" id="thinkReveal">Show me</button></div></div>`;
+    cm.querySelectorAll('.scanq').forEach(b=>b.onclick=()=>{ const on=b.dataset.on!=='1'; b.dataset.on=on?'1':'0';
+      b.style.borderColor=on?'var(--good)':'var(--line)'; b.textContent=(on?'✓ ':'')+b.textContent.replace(/^✓ /,''); });
     $('#thinkReveal').onclick=()=>{ rv.revealed[rv.ply]=true; rv.sel=null; rv.targets=[]; drawReview(); };
   }
   else if(inBookInacc){
@@ -1586,6 +1696,12 @@ function drawReview(){
           : `<div class="guessline">You tried <code class="mini">${rv.guess.san}</code>; the engine went for <code class="mini">${mv.bestSan}</code> — compare the two ideas.</div>`);
       const patt=tacticThemeOf(mv);
       cm.insertAdjacentHTML('beforeend', `<div class="arrowkey"><span class="k-bad"><i></i>You played ${mv.san}</span><span class="k-good"><i></i>Better: ${mv.bestSan}</span>${opp?`<span class="k-opp"><i></i>Opponent: ${opp.san}</span>`:''}${patt?`<span class="muted">pattern: ${patt}</span>`:''}</div>`);
+      const tErr=thinkingErrorOf(mv);
+      if(tErr) cm.insertAdjacentHTML('beforeend', `<div class="guessline muted" style="font-size:12px">🧠 thinking error: <b>${tErr}</b> — habit: ${THINK_HABIT[tErr]}</div>`);
+      if(mistakeKind(mv)==='positional' && g.structure)
+        cm.insertAdjacentHTML('beforeend', `<div class="guessline muted" style="font-size:12px">⛰ ${g.structure.name}: ${g.structure.tip}</div>`);
+      cm.insertAdjacentHTML('beforeend', `<div class="guessline"><button class="btn sec" id="replayHere" title="Play on from this position against the engine — find a better path this time">▶ Replay from here — can you save it?</button></div>`);
+      $('#replayHere').onclick=()=>startReplay(rv.ply);
       const pUrl=(patt&&lichessPractice(patt))||'https://lichess.org/training/mix';
       if(canLadder(patt)){
         const ownPz=store.puzzles.find(px=>px.gameId===g.id && px.ply===rv.ply)||null;
@@ -1621,6 +1737,36 @@ function drawReview(){
   const curMv=ml.querySelector('.cur'); if(curMv) curMv.scrollIntoView({block:'nearest'});
   renderGamePuzzles(g);
 }
+// the AI-narrated game story: verified facts only, phrased as 3 tiny chapters
+function storyPayload(g, fl){
+  const pick=x=>x?{no:mvNoOf(x.ply),san:x.san,theme:tacticThemeOf(x),thinkErr:thinkingErrorOf(x)}:null;
+  return { gameId:g.id, result:g.result, userColor:g.userColor,
+    opening:(rv.game===g&&rv.book)?rv.book.name:null, structure:g.structure?g.structure.name:null,
+    rootMove:pick(fl.root), finalBlunder:pick(fl.finalB),
+    wasWinning:fl.wasWinning, lostFromWinning:fl.lostFromWinning,
+    moves:g.analysis.filter(x=>x.isUser&&isUserMistake(x)).slice(0,12)
+      .map(x=>({no:mvNoOf(x.ply),san:x.san,tag:x.tag,phase:phaseOf(x.ply),theme:tacticThemeOf(x),thinkErr:thinkingErrorOf(x)})),
+    engineDetails:engineDetails() };
+}
+function renderStoryAI(g, fl){
+  const wrap=$('#storyAI'); if(!wrap||!LLM.enabled) return;
+  const show=(text,done)=>{ wrap.innerHTML=`<div class="ai${done?'':' streaming'}"><span class="ailead">✨ Coach's story</span> <span class="aitext"></span></div>`; wrap.querySelector('.aitext').textContent=text; };
+  if(g.story && g.storyVer===COMMENTARY_VER){ show(g.story,true); return; }
+  wrap.innerHTML='';
+  const btn=el('button','btn sec'); btn.textContent='✨ Tell the story';
+  btn.onclick=async()=>{
+    if(AUTH.available && !AUTH.user){ toast('Create a free account (top right) to use the AI coach — first 5 games free'); return; }
+    show('');
+    try{
+      const full=await streamSSE('/api/game-story', storyPayload(g,fl), t=>{ const tEl=wrap.querySelector('.aitext'); if(tEl) tEl.textContent=t; });
+      show(full,true); g.story=full; g.storyVer=COMMENTARY_VER; save();
+    }catch(e){
+      if(e.upgradeUrl!==undefined){ wrap.innerHTML=`<div class="ai"><span class="ailead">✨ Coach</span> <span class="aitext">${String(e.message).replace(/</g,'&lt;')} ${e.upgradeUrl?`<a href="${e.upgradeUrl}" target="_blank" rel="noopener"><b>Subscribe →</b></a>`:''}</span></div>`; }
+      else { wrap.innerHTML=''; wrap.appendChild(btn); toast('AI: '+e.message); }
+    }
+  };
+  wrap.appendChild(btn);
+}
 // the drills born from this game, right beside its review — click a row to jump to that moment;
 // plus the tactical patterns this game exposed, each linking to targeted lichess practice.
 function renderGamePuzzles(g){
@@ -1633,6 +1779,33 @@ function renderGamePuzzles(g){
     if(phaseOf(a.ply)==='endgame'){ const et=endgameTypeOf(a.fenBefore); themes[et]=(themes[et]||0)+1; }
   }
   let html='';
+  const fl=gameFlow(g);
+  if(fl){
+    const jump=x=>`<a href="#" class="story-jump" data-ply="${x.ply}"><b>move ${mvNoOf(x.ply)} (${x.san})</b></a>`;
+    const sent=[];
+    if(rv.book) sent.push(`Opening: the <b>${rv.book.name}</b>${g.structure?`, growing into a <b>${g.structure.name}</b> middlegame`:''}.`);
+    else if(g.structure) sent.push(`The middlegame settled into a <b>${g.structure.name}</b>.`);
+    if(fl.root){
+      let s=`The game really turned at ${jump(fl.root)}`;
+      const te=thinkingErrorOf(fl.root); if(te) s+=` — <b>${te}</b>`;
+      if(fl.finalB && fl.finalB.ply!==fl.root.ply) s+=`. The final blunder came later, at ${jump(fl.finalB)}, but the damage started earlier`;
+      sent.push(s+'.');
+    }else if(g.result==='win' && fl.worst){
+      sent.push(`You won this one 🎉 — ${jump(fl.worst)} was the shaky moment worth a second look.`);
+    }else if(fl.worst){
+      sent.push(`The costliest moment was ${jump(fl.worst)}.`);
+    }
+    if(fl.lostFromWinning) sent.push(`You were <b>winning</b> at one point — holding an advantage to the end is the skill to train.`);
+    if(fl.topPhase) sent.push(`Most slips came in the <b>${fl.topPhase}</b>.`);
+    const escAttr=s=>String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+    html+=`<h2 style="font-size:14px;margin:0 0 6px">📈 This game's story</h2>
+      <div style="font-size:13px;line-height:1.6">${sent.join(' ')}</div>
+      ${fl.root?`<div class="row" style="gap:8px;margin:8px 0;flex-wrap:wrap"><button class="btn" id="storyReplay">▶ Replay the turning point — can you save it?</button></div>`:''}
+      <div id="storyAI" style="margin:8px 0"></div>
+      <label class="fld">⭐ My biggest lesson from this game</label>
+      <input id="lessonInp" value="${escAttr(g.lesson||'')}" placeholder="e.g. don't push the pawns in front of my king" autocomplete="off"/>
+      <hr style="border:none;border-top:1px solid var(--line);margin:12px 0">`;
+  }
   if(pz.length){
     html+=`<h2 style="font-size:14px;margin:0 0 6px">🧩 Puzzles from this game (${pz.length})</h2>`
       + pz.map(p=>{
@@ -1660,7 +1833,11 @@ function renderGamePuzzles(g){
   }
   box.innerHTML=html;
   box.querySelectorAll('.gp-row').forEach(r=>r.onclick=()=>{ rv.ply=+r.dataset.ply; drawReview(); });
+  box.querySelectorAll('.story-jump').forEach(a2=>a2.onclick=e=>{ e.preventDefault(); rv.ply=+a2.dataset.ply; drawReview(); });
   box.querySelectorAll('[data-ladder]').forEach(b=>b.onclick=()=>buildLadder(b.dataset.ladder, null, g.studentId||null));
+  const sr=$('#storyReplay'); if(sr) sr.onclick=()=>startReplay(fl.root.ply);
+  const li=$('#lessonInp'); if(li) li.onchange=()=>{ g.lesson=li.value.trim(); save(); toast('Lesson saved ⭐'); };
+  if(fl) renderStoryAI(g, fl);
   const dg=$('#drillGameBtn'); if(dg) dg.onclick=()=>{ tn.seed=pz.slice(); switchView('train'); };
 }
 $('#rvFirst').onclick=()=>{rv.ply=0;drawReview();};
@@ -1690,6 +1867,82 @@ function onReviewSquare(name){
   drawReview();
 }
 
+/* ========================= REPLAY the turning point ======== */
+// "Could you save this game?" — the kid plays on from a flagged position against the
+// engine; after each pair of moves the coach compares their path with the real game.
+let rp=null;
+const REPLAY_DEPTH=8, REPLAY_MOVES=6;
+function rpClamp(cp){ return Math.max(-2000,Math.min(2000,cp)); }
+function rpUser(cp){ return rp.us==='w'? rpClamp(cp) : rpClamp(-cp); }
+function startReplay(ply){
+  const g=rv.game; if(!g||!g.analysis||!g.analysis[ply-1]) return;
+  const mv=g.analysis[ply-1];
+  clearSequence();
+  rp={ g, a:g.analysis, startPly:ply, us:mv.mover, chess:new Chess(mv.fenBefore),
+       sel:null, targets:[], moves:0, busy:false, done:false, run:Symbol(),
+       note:`This is the position before your <code class="mini">${mv.san}</code>. Run the scan, then find a better path — you have ${REPLAY_MOVES} moves to change the story.` };
+  rp.base=rpUser(mv.evalAfterCp);                       // the bar: where the real move left you
+  rv.ply=ply; rv.orient=mv.mover==='w'?'white':'black';
+  drawReplay();
+}
+function drawReplay(){
+  renderBoard($('#reviewBoard'), rp.chess, { orientation:rv.orient, arrows:[],
+    interactive:!rp.busy&&!rp.done, selected:rp.sel, targets:rp.targets, onSquare:onReplaySquare });
+  setEvalBar($('#reviewEval'), $('#reviewEvalNum'), rp.lastWhiteCp!==undefined?rp.lastWhiteCp:rp.a[rp.startPly-1].evalBeforeCp);
+  $('#reviewComment').innerHTML=
+    `<div class="think"><span class="tlead">▶ Replay — can you save this game?</span>`
+    +`<div>${rp.note}</div>`
+    +`<div class="guessline"><span class="muted" style="font-size:12px">your moves: ${rp.moves}/${REPLAY_MOVES}</span> `
+    +`<button class="btn sec" id="rpStop">${rp.done?'⏹ Back to the review':'⏹ Stop replay'}</button>`
+    +(rp.done?` <button class="btn sec" id="rpAgain">↻ Try again</button>`:'')+`</div></div>`;
+  $('#rpStop').onclick=()=>{ rp=null; drawReview(); };
+  const ag=$('#rpAgain'); if(ag) ag.onclick=()=>{ const ply=rp.startPly; rp=null; startReplay(ply); };
+}
+function onReplaySquare(name){
+  if(!rp||rp.busy||rp.done) return;
+  const pos=rp.chess;
+  if(rp.sel && rp.targets.includes(name)){
+    const m=pos.move({from:rp.sel,to:name,promotion:'q'});
+    rp.sel=null; rp.targets=[];
+    if(!m){ drawReplay(); return; }
+    rp.moves++;
+    rpAfterUserMove();
+    return;
+  }
+  const piece=pos.get(name);
+  if(piece && piece.color===rp.us && pos.turn()===rp.us){ rp.sel=name; rp.targets=pos.moves({square:name,verbose:true}).map(v=>v.to); }
+  else { rp.sel=null; rp.targets=[]; }
+  drawReplay();
+}
+async function rpAfterUserMove(){
+  const run=rp.run;
+  if(rp.chess.in_checkmate()){ rp.done=true; rp.note='🏆 Checkmate — you found the win. That’s the save!'; soundGood(); drawReplay(); return; }
+  if(rp.chess.game_over()){ rp.done=true; rp.note='Draw — often a better ending than the real game. Nicely held.'; drawReplay(); return; }
+  rp.busy=true; rp.note='🤔 Your opponent is thinking…'; drawReplay();
+  const reply=await evalFen(rp.chess.fen(), REPLAY_DEPTH);
+  if(!rp||rp.run!==run) return;
+  if(reply.bestUci) rp.chess.move({from:reply.bestUci.slice(0,2),to:reply.bestUci.slice(2,4),promotion:reply.bestUci[4]||'q'});
+  if(rp.chess.in_checkmate()){ rp.busy=false; rp.done=true; rp.note='💥 The opponent found a mate this time. Back up and try another plan.'; soundBad(); drawReplay(); return; }
+  const now=await evalFen(rp.chess.fen(), REPLAY_DEPTH);
+  if(!rp||rp.run!==run) return;
+  rp.lastWhiteCp=now.whiteCp;
+  const you=rpUser(now.whiteCp), game=rp.base, d=you-game;   // vs where the real move left you
+  rp.busy=false;
+  if(rp.moves>=REPLAY_MOVES){
+    rp.done=true;
+    rp.note = d>=100 ? `🎉 That’s the save — after ${REPLAY_MOVES} moves you stand clearly better than the real game did!`
+            : d>=-50 ? 'Solid — you matched the real game. Read the coach’s idea once more, then Try again.'
+            : 'It slipped again — that’s normal, patterns take a few rounds. Read the coach’s explanation, then Try again.';
+    (d>=100?soundGood:soundBad)();
+  }else{
+    rp.note = d>=75 ? '💪 Better than the real game — keep going!'
+            : d>=-50 ? '⚖️ About level with the real game so far.'
+            : '📉 Slipping — slow down and run the scan again.';
+  }
+  if(engineDetails()) rp.note+=` <span class="muted">(you: ${cpToPawns(you)} · the game: ${cpToPawns(game)})</span>`;
+  drawReplay();
+}
+
 /* ========================= TRAIN view ====================== */
 let tn={queue:[],cur:null,pos:null,sel:null,targets:[],orient:'white',solved:false,profile:null,arrows:[]};
 function renderTrainMeta(){
@@ -1703,6 +1956,7 @@ function renderTrainMeta(){
   const banner=$('#trainBanner');
   if(tn.profile){ banner.style.display='flex'; banner.querySelector('.who').textContent='Coaching: '+studentName(tn.profile); }
   else banner.style.display='none';
+  renderToday();
 }
 function drillProfile(sid){ tn.profile=sid||null; switchView('train'); }
 /* ---- fresh puzzles pulled from lichess, themed to the player's weaknesses ---- */
@@ -1905,7 +2159,8 @@ function startTrain(){
     $('#trainActive').style.display='none';
     $('#trainEmpty').style.display='block';
     $('#trainEmpty').innerHTML = pool.length
-      ? `All caught up — no puzzles due today. <div style="margin-top:10px"><button class="btn sec" id="practiceEarly">Practice early anyway</button></div>`
+      ? `All caught up — no puzzles due today. <div style="margin-top:10px"><button class="btn sec" id="practiceEarly">Practice early anyway</button></div>
+         <div class="muted" style="font-size:12px;margin-top:10px">Coach's golden rule: one long game (15+10) played slowly and reviewed well beats ten blitz games.</div>`
       : 'No puzzles yet — import and analyze some games first.';
     const pe=$('#practiceEarly'); if(pe) pe.onclick=()=>{ tn.queue=pool.slice().sort((a,b)=>b.lossCp-a.lossCp); nextPuzzle(); };
     return;
@@ -2031,16 +2286,24 @@ function statsFor(sid){
   const analyzed=gamesFor(sid).filter(g=>g.analysis);
   let userMoves=0,blunders=0,mistakes=0,inacc=0;
   const phases={opening:{b:0,m:0},middlegame:{b:0,m:0},endgame:{b:0,m:0}};
-  const themes={}, endgames={};
+  const themes={}, endgames={}, te={}, structs={};
+  let winHad=0, winConverted=0;
+  for(const g of analyzed){
+    const fl=gameFlow(g);
+    if(fl&&fl.wasWinning){ winHad++; if(g.result==='win') winConverted++; }
+    if(g.structure) structs[g.structure.name]=(structs[g.structure.name]||0)+1;
+  }
   for(const g of analyzed) for(const a of g.analysis){ if(!a.isUser)continue; userMoves++;
     const ph=phaseOf(a.ply);
     if(a.tag==='blunder'){blunders++;phases[ph].b++;} else if(a.tag==='mistake'){mistakes++;phases[ph].m++;} else if(a.tag==='inaccuracy')inacc++;
     if((a.tag==='blunder'||a.tag==='mistake') && !playedIsBest(a)){
       const th=tacticThemeOf(a); if(th) themes[th]=(themes[th]||0)+1;
+      const terr=thinkingErrorOf(a); if(terr) te[terr]=(te[terr]||0)+1;
       if(ph==='endgame'){ const et=endgameTypeOf(a.fenBefore); endgames[et]=(endgames[et]||0)+1; }
     } }
   const pz=puzzlesFor(sid);
   return {analyzed, userMoves, blunders, mistakes, inacc, phases, themes, endgames,
+    te, structs, winHad, winConverted,
     rate: userMoves?(blunders/userMoves*100).toFixed(1):'0',
     mastered: pz.filter(p=>p.box>=MAX_BOX).length, totalPuzzles: pz.length,
     due: pz.filter(p=>p.dueAt<=todayEnd()).length };
@@ -2101,6 +2364,19 @@ function renderStats(){
     ['Blunder rate', s.rate+'%'],['Puzzles mastered', s.mastered+' / '+s.totalPuzzles]
   ].map(([l,n])=>`<div class="kpi"><div class="n">${n}</div><div class="l">${l}</div></div>`).join('');
   renderPhaseBars($('#phaseBars'), s.phases);
+  const tp=$('#thinkProfile');
+  if(tp){
+    const rows=[];
+    if(s.te['ignored a threat']) rows.push(`In <b>${s.te['ignored a threat']}</b> of your flagged mistakes, the opponent's threat was <b>already on the board</b> — habit: ${THINK_HABIT['ignored a threat']}`);
+    if(s.te['moved into danger']) rows.push(`<b>${s.te['moved into danger']}×</b> you moved a piece onto a square where it could be taken — habit: ${THINK_HABIT['moved into danger']}`);
+    if(s.te['king safety']) rows.push(`<b>${s.te['king safety']}×</b> the real issue was your king — habit: ${THINK_HABIT['king safety']}`);
+    if(s.winHad) rows.push(`Winning positions: converted <b>${s.winConverted} of ${s.winHad}</b>${s.winConverted<s.winHad?' — holding an advantage to the end is a skill of its own.':' — great converting!'}`);
+    const st=Object.entries(s.structs).sort((x,y)=>y[1]-x[1]).map(([k,v])=>`${k}${v>1?` ×${v}`:''}`).join(' · ');
+    if(st) rows.push(`Structures you keep reaching: ${st} — learn each one's standard plan and you'll never feel lost there.`);
+    tp.innerHTML = rows.length ? `<div class="card"><h2 style="margin:0 0 4px">🧠 Thinking profile</h2>
+      <p class="sub" style="margin:0 0 8px">Not just what went wrong — the thinking habits behind it.</p>
+      <div style="font-size:13px;line-height:1.9">${rows.map(r=>'• '+r).join('<br>')}</div></div>` : '';
+  }
   renderAdminPanel();
   const fmt=o=>Object.entries(o).sort((x,y)=>y[1]-x[1]).map(([k,v])=>{
     const u=lichessPractice(k);
@@ -2122,6 +2398,35 @@ function renderStats(){
     tb.appendChild(tr);
   }
   t.appendChild(tb); wrap.innerHTML=''; wrap.appendChild(t);
+}
+
+/* ========================= TODAY card (home) =============== */
+// "feels like a coach, not an engine": one small daily loop assembled from real data
+function renderToday(){
+  const box=$('#todayCard'); if(!box) return;
+  const analyzed=gamesFor(null).filter(g=>g.analysis);
+  if(!analyzed.length){ box.innerHTML=''; return; }
+  const s=statsFor(null);
+  const dueC=conceptsDue(null);
+  const last=analyzed.slice().sort((a,b)=>(b.analyzedAt||0)-(a.analyzedAt||0))[0];
+  const fl=last?gameFlow(last):null;
+  const bits=[];
+  if(s.due) bits.push(`<button class="btn" data-act="train">🧩 ${s.due} puzzle${s.due>1?'s':''} due</button>`);
+  dueC.slice(0,3).forEach(c=>bits.push(`<button class="btn sec" data-retest2="${c.theme}">🔁 Retest: ${c.theme}</button>`));
+  if(fl&&fl.root) bits.push(`<button class="btn sec" data-act="turn">▶ Replay your last game's turning point</button>`);
+  let weak='';
+  const teTop=Object.entries(s.te||{}).sort((x,y)=>y[1]-x[1])[0];
+  const thTop=Object.entries(s.themes||{}).sort((x,y)=>y[1]-x[1])[0];
+  if(teTop&&teTop[1]>=2) weak=`Current focus: <b>${teTop[0]}</b> — ${THINK_HABIT[teTop[0]]}`;
+  else if(thTop) weak=`Current focus: <b>${thTop[0]}</b> — it keeps showing up in your games.`;
+  if(!bits.length && !weak){ box.innerHTML=''; return; }
+  box.innerHTML=`<div class="card"><h2 style="margin:0 0 4px">☀️ Today's Blunderloop</h2>
+    ${weak?`<p class="sub" style="margin:0 0 8px">${weak}</p>`:''}
+    <div class="row" style="gap:8px;flex-wrap:wrap">${bits.join('')}</div>
+    <div class="muted" style="font-size:12px;margin-top:8px">Coach's golden rule: one long game (15+10) played slowly and reviewed well beats ten blitz games.</div></div>`;
+  box.querySelectorAll('[data-act="train"]').forEach(b=>b.onclick=()=>switchView('train'));
+  box.querySelectorAll('[data-retest2]').forEach(b=>b.onclick=()=>buildLadder(b.dataset.retest2, null, null));
+  box.querySelectorAll('[data-act="turn"]').forEach(b=>b.onclick=()=>{ openReview(last.id); switchView('review'); startReplay(fl.root.ply); });
 }
 
 /* ========================= view switching ================== */
@@ -2193,7 +2498,8 @@ function renderCoachSummary(container, sid, s){
     const blunders=puzzlesFor(sid).slice().sort((a,b)=>b.lossCp-a.lossCp).slice(0,12)
       .map(p=>({playedSan:p.playedSan,correctSan:p.correctSan,lossCp:p.lossCp,phase:phaseOf(p.ply)}));
     const payload={ sid, name:studentName(sid), rate:s.rate, blunders,
-      phases:{opening:s.phases.opening.b, middlegame:s.phases.middlegame.b, endgame:s.phases.endgame.b} };
+      phases:{opening:s.phases.opening.b, middlegame:s.phases.middlegame.b, endgame:s.phases.endgame.b},
+      thinkErrs:s.te, conversion:s.winHad?{had:s.winHad,won:s.winConverted}:null };
     try{ const full=await streamSSE('/api/coach-summary', payload, t=>{tEl.textContent=t;}); card.classList.remove('streaming'); tEl.textContent=full; student.summary=full; save(); }
     catch(e){ container.innerHTML=''; container.appendChild(btn); toast('AI: '+e.message); }
   };

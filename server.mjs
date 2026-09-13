@@ -172,7 +172,7 @@ let cache = {};
 try { if (existsSync(CACHE_FILE)) cache = JSON.parse(readFileSync(CACHE_FILE, 'utf8')); } catch { cache = {}; }
 let saveTimer = null;
 function persistCache(){ clearTimeout(saveTimer); saveTimer = setTimeout(()=>writeFile(CACHE_FILE, JSON.stringify(cache)).catch(()=>{}), 400); }
-const cacheKey = b => `3check7|${MODEL}|${b.fen}|${b.playedUci || b.playedSan || ''}`;
+const cacheKey = b => `3check8|${MODEL}|${b.fen}|${b.playedUci || b.playedSan || ''}`;
 function hash(str){ let h=5381; for(let i=0;i<str.length;i++) h=((h<<5)+h+str.charCodeAt(i))|0; return (h>>>0).toString(36); }
 
 /* ---- Anthropic client (lazy; only if a key is present) ---- */
@@ -200,7 +200,12 @@ You are told the SEVERITY of the move — it changes your entire framing:
 
 You may be told the KIND of mistake and the game PHASE — adapt to them:
 • tactical — a concrete sequence punishes it. This is the most valuable lesson: name the tactic and the punishing moves plainly.
-• positional — a quieter judgement slip. Give ONE simple idea in one sentence, and add that this is something to understand, not memorize — never lecture deeply on subtle positional detail.
+• positional — a quieter judgement slip. Explain it through the ONE element of the position map that fits best — king safety, your worst-placed piece, space, pawn structure, or a key square/file — in one simple sentence. Never lecture on more than one element. Then append ONE extra final line, "Plan: <a simple 3–5-move goal in plain words>" (e.g. "Plan: bring your knight to e5 and double rooks on the c-file") — a stage goal, never a memorized sequence.
+You may also be given the PAWN STRUCTURE by name (e.g. IQP, Carlsbad, hanging pawns) — when it is relevant, mention it once with its standard plan in kid words, so the player learns to read the terrain.
+You may be given the THINKING ERROR behind the move — the habit that failed, derived from the board:
+• "ignored a threat" — the opponent's punishing idea was ALREADY on the board before this move. Tie your 👉 line to the habit: after every opponent move, ask "What changed?"
+• "moved into danger" — the moved piece landed where it could be taken. Tie the 👉 line to running Safe? before letting go of the piece.
+• "king safety" — the real issue was the king. Tie the 👉 line to checking the king first.
 • opening phase — teach ONLY through the three opening principles: control the center, develop your pieces quickly, keep your king safe. Tie the advice to one of those principles. NEVER give a sequence of opening moves to remember — name at most the single better move. The player should learn ideas, not lines. If you are given the opening's name, mention it naturally once so the player learns what their opening is called.
 
 Output format depends on SEVERITY. No markdown, no move-number dumps, no engine jargon (never say "centipawn").
@@ -227,6 +232,8 @@ function buildUserText(b){
   if (b.openingName) lines.push(`This opening is known as: ${b.openingName}.`);
   if (b.kind)  lines.push(`Kind of mistake: ${b.kind}`);
   if (b.phase) lines.push(`Game phase: ${b.phase}`);
+  if (b.structureName) lines.push(`Pawn structure of this game: ${b.structureName}`);
+  if (b.thinkingError) lines.push(`Thinking error behind the move (derived from the board): ${b.thinkingError}`);
   if (b.oppLastSan) lines.push(`The opponent's move that just created this position: ${b.oppLastSan}`);
   if (b.oppBestSan) lines.push(`The opponent's move was not best either — the engine preferred ${b.oppBestSan} for them${typeof b.oppLossPawns==='number' ? ` (their move gave back about ${b.oppLossPawns} pawns)` : ''}.`);
   lines.push(
@@ -252,6 +259,7 @@ const SUMMARY_SYSTEM = `You are a chess coach summarizing a student's recurring 
 You are given the student's blunder rate, how their blunders split across game phases, and a list of their worst blunders (the move they played vs. the engine's best move).
 Base your summary ONLY on those facts. Identify the 2–3 recurring patterns you actually see (e.g. hangs pieces in the middlegame, misses opponent threats, drops material to knight forks, weak in the opening).
 The student is being taught the 3-Check they run every move — "Why?" (spot the opponent's threat), "Me?" (give each move a job), "Safe?" (don't hand over a free piece). For each pattern, say which of these three checks the student most needs to lean on, and give one concrete piece of practice advice.
+If you are given thinking-error counts (e.g. how often the opponent's threat was already on the board, or a piece was moved onto an attacked square) or where their games tend to turn, describe the student's recurring FLOW — when and why their positions start to slide — and recommend ONE thinking habit to train (such as asking "What changed?" after every opponent move), not just a list of blunder types.
 Write 3–5 short sentences of plain prose addressed to the coach ("Your student…"). No headers, no bullet lists, no engine jargon.`;
 
 function buildSummaryText(b){
@@ -261,9 +269,12 @@ function buildSummaryText(b){
     `Blunders by phase — opening: ${b.phases?.opening||0}, middlegame: ${b.phases?.middlegame||0}, endgame: ${b.phases?.endgame||0}.`,
     `Their worst blunders (played → engine's best, pawns lost):`,
     ...(b.blunders||[]).map(x => `  • ${x.playedSan} → ${x.correctSan} (lost ${(x.lossCp/100).toFixed(1)}, ${x.phase})`),
-    '',
-    'Summarize their recurring weaknesses and give concrete, actionable advice.'
   ];
+  if (b.thinkErrs && Object.keys(b.thinkErrs).length)
+    lines.push(`Thinking errors behind their flagged moves (derived from the board): ` +
+      Object.entries(b.thinkErrs).map(([k,v])=>`${k} ×${v}`).join(', ') + '.');
+  if (b.conversion) lines.push(`Winning positions: converted ${b.conversion.won} of ${b.conversion.had}.`);
+  lines.push('', 'Summarize their recurring weaknesses and give concrete, actionable advice.');
   return lines.join('\n');
 }
 
@@ -278,6 +289,57 @@ async function streamSummary(res, b){
       model: MODEL, max_tokens: 500,
       system: [{ type: 'text', text: SUMMARY_SYSTEM, cache_control: { type: 'ephemeral' } }],
       messages: [{ role: 'user', content: buildSummaryText(b) }],
+    });
+    let full = '';
+    stream.on('text', t => { full += t; send('delta', { t }); });
+    const msg = await stream.finalMessage();
+    if (msg.stop_reason !== 'refusal') { cache[key] = full.trim(); persistCache(); }
+    send('done', { cached: false, model: MODEL }); res.end();
+  } catch (e) { send('error', { error: 'LLM request failed: ' + (e?.message || String(e)) }); res.end(); }
+}
+
+/* ---- game story: the review-as-narrative endpoint ("root cause vs final blunder") ---- */
+const STORY_SYSTEM = `You are a warm chess coach telling a young player the STORY of one of their games — not a list of mistakes, but how the game flowed.
+You are given only verified facts from an engine analysis: the opening, the flagged moves (with severity, phase, tactical theme, and the thinking error behind them when known), where the game turned (the root cause), the final blunder, and whether a winning position was lost.
+Base everything ONLY on those facts. Never invent moves, lines, or reasons.
+Tell it in 3 tiny chapters of 1–2 sentences each, plain prose, no headers:
+1. The opening and early game (name the opening if given; say what went fine).
+2. Where the game really turned — if the root cause differs from the final blunder, make that the point: "the final blunder came at move X, but the game turned at move Y". Use the thinking error to explain WHY it happened, in kid words.
+3. The finish, plus ONE lesson: a single thinking habit to practice next game (e.g. after every opponent move ask "What changed?").
+If they lost from a winning position, say plainly that holding an advantage is the skill to train — with warmth, not blame.
+Under 120 words total. Address the player as "you". No engine jargon, no evaluations in numbers unless the input says engine details are on.`;
+
+function buildStoryText(b){
+  const lines = [
+    `Result for the player: ${b.result} (playing ${b.userColor})`,
+  ];
+  if (b.opening) lines.push(`Opening: ${b.opening}`);
+  if (b.structure) lines.push(`Pawn structure reached: ${b.structure}`);
+  if (b.rootMove) lines.push(`Where the game turned (root cause): move ${b.rootMove.no}, ${b.rootMove.san}${b.rootMove.thinkErr?` — thinking error: ${b.rootMove.thinkErr}`:''}${b.rootMove.theme?` — pattern: ${b.rootMove.theme}`:''}`);
+  if (b.finalBlunder && (!b.rootMove || b.finalBlunder.no !== b.rootMove.no))
+    lines.push(`Final blunder: move ${b.finalBlunder.no}, ${b.finalBlunder.san}${b.finalBlunder.theme?` (${b.finalBlunder.theme})`:''}`);
+  if (b.wasWinning) lines.push(`The player had a clearly winning position at some point${b.lostFromWinning ? ' and lost it' : ''}.`);
+  if (Array.isArray(b.moves) && b.moves.length){
+    lines.push('All flagged moves:');
+    for (const m of b.moves.slice(0, 12))
+      lines.push(`  • move ${m.no} ${m.san} — ${m.tag}, ${m.phase}${m.theme?`, ${m.theme}`:''}${m.thinkErr?`, thinking error: ${m.thinkErr}`:''}`);
+  }
+  lines.push(`Engine details are ${b.engineDetails ? 'ON (numbers allowed)' : 'OFF (no numbers)'}.`,
+    '', "Tell this game's story in the 3-chapter format.");
+  return lines.join('\n');
+}
+
+async function streamStory(res, b){
+  const key = 'story8|' + MODEL + '|' + (b.gameId || '') + '|' + hash(JSON.stringify([b.rootMove, b.finalBlunder, b.moves]));
+  res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache, no-transform', 'connection': 'keep-alive', 'x-accel-buffering': 'no' });
+  const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  if (cache[key]) { send('delta', { t: cache[key] }); send('done', { cached: true, model: MODEL }); return res.end(); }
+  try {
+    const anthropic = await getClient();
+    const stream = anthropic.messages.stream({
+      model: MODEL, max_tokens: 400,
+      system: [{ type: 'text', text: STORY_SYSTEM, cache_control: { type: 'ephemeral' } }],
+      messages: [{ role: 'user', content: buildStoryText(b) }],
     });
     let full = '';
     stream.on('text', t => { full += t; send('delta', { t }); });
@@ -645,6 +707,16 @@ const server = http.createServer(async (req, res) => {
       if (!g2.ok) return json(g2.code, { error: g2.error, upgrade: !!g2.upgrade, upgradeUrl: g2.upgradeUrl || '' });
       try { return await handleScoresheet(res, b); }
       catch (e) { res.writeHead(500, {'content-type':'application/json'}); return res.end(JSON.stringify({ error:'Scoresheet read failed: ' + (e?.message || String(e)) })); }
+    }
+
+    if (url.pathname === '/api/game-story' && req.method === 'POST') {
+      if (!HAS_KEY) { res.writeHead(503, {'content-type':'application/json'}); return res.end(JSON.stringify({ error: 'No ANTHROPIC_API_KEY configured on the server.' })); }
+      let b; try { b = JSON.parse(await readBody(req)); } catch { res.writeHead(400); return res.end('bad json'); }
+      if (!b || !b.gameId || !b.result) { res.writeHead(400, {'content-type':'application/json'}); return res.end(JSON.stringify({ error: 'missing gameId/result' })); }
+      // same credit key as this game's move commentary — the story never costs an extra free game
+      const gs = aiGate(sessionUser(req), String(b.gameId));
+      if (!gs.ok) return json(gs.code, { error: gs.error, upgrade: !!gs.upgrade, upgradeUrl: gs.upgradeUrl || '' });
+      return streamStory(res, b);
     }
 
     if (url.pathname === '/api/coach-summary' && req.method === 'POST') {

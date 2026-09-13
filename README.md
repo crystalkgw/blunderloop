@@ -1,6 +1,6 @@
 # Blunderloop
 
-**Train on the mistakes you actually make.** A client-side chess trainer that ingests
+**Don't just fix the move. Fix the thinking.** A client-side chess trainer that ingests
 your own games, finds your blunders with Stockfish, and drills those *exact* positions
 back to you on a spaced-repetition schedule until they stop happening.
 
