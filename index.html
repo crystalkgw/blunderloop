@@ -403,15 +403,33 @@
   </div>
 </div>
 <div id="reflectModal" style="display:none;position:fixed;inset:0;background:rgba(5,8,18,.86);z-index:70;align-items:center;justify-content:center">
-  <div class="card" style="width:min(520px,94vw);max-height:92vh;overflow:auto">
+  <div class="card" style="width:min(880px,96vw);max-height:94vh;overflow:auto">
     <div class="row" style="align-items:baseline;gap:10px">
       <h2 style="margin:0">🪞 Reflect first</h2>
       <span id="rfDots" class="muted" style="font-size:12px"></span>
       <a href="#" id="rfSkip" class="muted" style="margin-left:auto;font-size:12px">Skip this time</a>
     </div>
-    <p class="sub" style="margin:4px 0 14px">Your read of the game — <b>before</b> the engine's. ~1 minute.</p>
-    <div id="rfBody"></div>
-    <div class="row" style="margin-top:14px;align-items:center">
+    <p class="sub" style="margin:4px 0 12px">Your read of the game — <b>before</b> the engine's. Step through the moves as much as you like; the engine stays quiet until you finish.</p>
+    <div style="display:flex;gap:16px;flex-wrap:wrap">
+      <div style="width:min(320px,92vw);flex-shrink:0">
+        <div class="board" id="rfBoard"></div>
+        <div class="row" style="gap:6px;margin-top:8px;justify-content:center;align-items:center">
+          <button class="btn sec" id="rfFirst" style="padding:5px 10px">⏮</button>
+          <button class="btn sec" id="rfPrev" style="padding:5px 10px">◀</button>
+          <button class="btn sec" id="rfFwd" style="padding:5px 10px">▶</button>
+          <button class="btn sec" id="rfEnd" style="padding:5px 10px">⏭</button>
+          <span id="rfPos" class="muted" style="font-size:12px"></span>
+        </div>
+      </div>
+      <div style="flex:1;min-width:260px">
+        <div id="rfBody"></div>
+        <div style="margin-top:12px">
+          <div class="muted" style="font-size:11px;margin-bottom:4px">Game history — click any move to see it on the board</div>
+          <div id="rfMoves" style="max-height:170px;overflow:auto;line-height:2;font-size:13px;border:1px solid var(--line);border-radius:10px;padding:6px 10px"></div>
+        </div>
+      </div>
+    </div>
+    <div class="row" style="margin-top:12px;align-items:center">
       <a href="#" id="rfBack" class="muted" style="font-size:12px;display:none">← Back</a>
       <span class="muted" style="margin-left:auto;font-size:11px;letter-spacing:.4px">Reflect → Reveal → Practice → Replay</span>
     </div>
@@ -1906,11 +1924,49 @@ const RF_STD=[
 let RF=null;
 const escT=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 function openReflect(g){
-  RF={g, steps: engineDetails()?RF_STD:RF_KID, mode: engineDetails()?'std':'kid', idx:0, answers:{}};
+  RF={g, steps: engineDetails()?RF_STD:RF_KID, mode: engineDetails()?'std':'kid', idx:0, answers:{},
+      ply:g.analysis.length};                          // start at the final position
   $('#reflectModal').style.display='flex';
-  rfRender();
+  rfDrawMoves(); rfDrawBoard(); rfRender();
 }
 function rfClose(){ $('#reflectModal').style.display='none'; RF=null; }
+/* neutral game browser inside the modal: position + plain move list, ZERO evaluation
+   (no ??/? marks, no colors, no eval bar) — the whole point is reflecting unspoiled */
+function rfDrawBoard(){
+  const a=RF.g.analysis, p=RF.ply;
+  const fen = p===0 ? a[0].fenBefore : a[p-1].fenAfter;
+  const u = p>0 ? a[p-1].playedUci : null;
+  renderBoard($('#rfBoard'), new Chess(fen), { orientation:RF.g.userColor, interactive:false,
+    lastMove: u ? {from:u.slice(0,2), to:u.slice(2,4)} : null });
+  $('#rfPos').textContent = p===0 ? 'start' : `move ${mvNoOf(p)}${p%2?'':'…'} of ${mvNoOf(a.length)}`;
+  const cur=$('#rfMoves .rfnav[data-ply="'+p+'"]');
+  document.querySelectorAll('#rfMoves .rfnav').forEach(x=>{ x.style.background='transparent'; x.style.fontWeight='400'; });
+  if(cur){ cur.style.background='var(--line)'; cur.style.fontWeight='700'; cur.scrollIntoView({block:'nearest'}); }
+  rfSyncPick();
+}
+function rfDrawMoves(){
+  const a=RF.g.analysis;
+  let h='';
+  a.forEach((x,i)=>{
+    if(i%2===0) h+=`<span class="muted" style="margin-right:2px">${i/2+1}.</span>`;
+    h+=`<button class="rfnav" data-ply="${x.ply}" style="font:inherit;padding:1px 6px;border-radius:6px;border:none;background:transparent;color:inherit;cursor:pointer;margin-right:4px">${x.san}</button>`;
+  });
+  const mv=$('#rfMoves'); mv.innerHTML=h;
+  mv.querySelectorAll('.rfnav').forEach(b=>b.onclick=()=>{ RF.ply=+b.dataset.ply; rfDrawBoard(); });
+}
+function rfNavTo(p){ if(!RF) return; RF.ply=Math.max(0,Math.min(RF.g.analysis.length,p)); rfDrawBoard(); }
+$('#rfFirst').onclick=()=>rfNavTo(0);
+$('#rfPrev').onclick=()=>RF&&rfNavTo(RF.ply-1);
+$('#rfFwd').onclick=()=>RF&&rfNavTo(RF.ply+1);
+$('#rfEnd').onclick=()=>RF&&rfNavTo(RF.g.analysis.length);
+// the "take back" question picks whatever move is being viewed — keep its button in sync
+function rfSyncPick(){
+  const b=$('#rfPick'); if(!b||!RF) return;
+  const a=RF.g.analysis, p=RF.ply;
+  const ok = p>0 && a[p-1].isUser;
+  b.disabled=!ok;
+  b.textContent = ok ? `😬 Take back move ${mvNoOf(p)} (${a[p-1].san})` : 'View one of YOUR moves on the board, then pick it';
+}
 function rfRender(){
   const st=RF.steps[RF.idx];
   $('#rfDots').textContent=RF.steps.map((_,i)=>i<RF.idx?'●':i===RF.idx?'◉':'○').join(' ');
@@ -1921,20 +1977,16 @@ function rfRender(){
   if(st.chips){
     h+=`<div style="display:flex;gap:8px;flex-wrap:wrap">`+st.chips.map(c=>`<button class="rfchip" data-v="${escT(c)}" style="${chipCss}">${c}</button>`).join('')+`</div>`;
   }else if(st.moves){
-    h+=`<div style="max-height:190px;overflow:auto;line-height:2;font-size:13px;border:1px solid var(--line);border-radius:10px;padding:8px 10px">`;
-    RF.g.analysis.forEach((a,i)=>{
-      if(i%2===0) h+=`<span class="muted" style="margin-right:2px">${i/2+1}.</span>`;
-      h+= a.isUser ? `<button class="rfmv" data-ply="${a.ply}" style="font:inherit;padding:1px 6px;border-radius:6px;border:1px solid var(--line);background:transparent;color:inherit;cursor:pointer;margin-right:4px">${a.san}</button>`
-                   : `<span style="margin-right:8px">${a.san}</span>`;
-    });
-    h+=`</div><div style="margin-top:8px"><button class="rfchip" data-v="" style="${chipCss}">not sure</button></div>`;
+    h+=`<p class="sub" style="margin:0 0 10px">Step through the game (board and move list) until you find it.</p>
+        <button class="btn" id="rfPick" style="display:block;margin-bottom:8px"></button>
+        <button class="rfchip" data-v="" style="${chipCss}">not sure</button>`;
   }else{ // free text, optional
     h+=`<input id="rfText" placeholder="a few words — or leave empty" autocomplete="off" style="width:100%"/>
         <div style="margin-top:10px"><button class="btn" id="rfNext">Continue</button></div>`;
   }
   body.innerHTML=h;
   body.querySelectorAll('.rfchip').forEach(b=>b.onclick=()=>rfAnswer(st.k, b.dataset.v));
-  body.querySelectorAll('.rfmv').forEach(b=>b.onclick=()=>rfAnswer(st.k, +b.dataset.ply));
+  const pk=$('#rfPick'); if(pk){ pk.onclick=()=>{ if(RF.ply>0&&RF.g.analysis[RF.ply-1].isUser) rfAnswer(st.k, RF.ply); }; rfSyncPick(); }
   const nx=$('#rfNext'); if(nx) nx.onclick=()=>rfAnswer(st.k, ($('#rfText').value||'').trim());
   const tx=$('#rfText'); if(tx){ tx.focus(); tx.addEventListener('keydown',e=>{ if(e.key==='Enter') nx.click(); }); }
 }
@@ -1953,7 +2005,13 @@ function rfAnswer(key, val){
 $('#rfBack').onclick=e=>{ e.preventDefault(); if(RF&&RF.idx>0){ RF.idx--; rfRender(); } };
 $('#rfSkip').onclick=e=>{ e.preventDefault(); if(!RF) return; RF.g.reflection={skipped:true, at:Date.now()}; const g=RF.g; rfClose(); save(); if(rv.game===g) drawReview(); };
 $('#reflectModal').addEventListener('click',e=>{ if(e.target===$('#reflectModal')&&RF){ RF.g._rfDismissed=true; rfClose(); } });
-document.addEventListener('keydown',e=>{ if(e.key==='Escape'&&RF){ RF.g._rfDismissed=true; rfClose(); } });
+document.addEventListener('keydown',e=>{
+  if(!RF) return;
+  if(e.key==='Escape'){ RF.g._rfDismissed=true; rfClose(); return; }
+  if(e.target && e.target.tagName==='INPUT') return;   // don't steal arrows from free-text answers
+  if(e.key==='ArrowLeft'){ e.preventDefault(); rfNavTo(RF.ply-1); }
+  if(e.key==='ArrowRight'){ e.preventDefault(); rfNavTo(RF.ply+1); }
+});
 /* ---- the Reveal: your read vs the engine ---- */
 function rfCauseMap(reason){
   return {'missed tactic':'a missed tactic','ignored opponent threat':'ignored a threat','poor king safety':'king safety',
