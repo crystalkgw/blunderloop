@@ -1907,17 +1907,19 @@ function onReviewSquare(name){
 /* ========================= REFLECT (before the engine speaks) ======== */
 // BlunderLoop Reflect: the player reconstructs their own thinking FIRST, so the
 // Reveal can show the gap between perceived cause and actual cause.
+// the move pick comes FIRST so every later question is anchored to a concrete moment
+// ("what were you trying to do around move 15 (Qe3)?") instead of the whole game.
 const RF_KID=[
-  {k:'myPlan',  q:'What were you trying to do in this game?', chips:['attack the king','grab pieces','stay safe','push my pawns',"I'm not sure"]},
-  {k:'oppPlan', q:'What was your opponent trying to do?', chips:['attack my king','grab my pieces','control the center','push pawns','no idea']},
-  {k:'pieceTrouble', q:'Which of your pieces was in the most trouble?', chips:['♛ queen','♜ rook','♝ bishop','♞ knight','♟ pawns','👑 king','not sure']},
   {k:'movePly', q:'Which move would you like to take back?', moves:true},
+  {k:'myPlan',  q:'What were you trying to do{at}?', chips:['attack the king','grab pieces','stay safe','push my pawns',"I'm not sure"]},
+  {k:'oppPlan', q:'What was your opponent trying to do{at}?', chips:['attack my king','grab my pieces','control the center','push pawns','no idea']},
+  {k:'pieceTrouble', q:'Which of your pieces was in the most trouble{at}?', chips:['♛ queen','♜ rook','♝ bishop','♞ knight','♟ pawns','👑 king','not sure']},
 ];
 const RF_STD=[
   {k:'phase',   q:'Where did the game start to go wrong?', chips:['opening','middlegame','endgame','not sure']},
   {k:'movePly', q:'Which move are you least happy with?', moves:true},
-  {k:'plan',    q:'What was your plan at that moment?', chips:['attack','improve a piece','defend','trade pieces','push a pawn / gain space',"I didn't really have a plan",'other']},
-  {k:'oppPlan', q:'What was your opponent trying to do?', text:true},
+  {k:'plan',    q:'What was your plan{at}?', chips:['attack','improve a piece','defend','trade pieces','push a pawn / gain space',"I didn't really have a plan",'other']},
+  {k:'oppPlan', q:'What was your opponent trying to do{at}?', text:true},
   {k:'reason',  q:'What was the main reason you got into trouble?', chips:['missed tactic','ignored opponent threat','poor king safety','bad piece placement','wrong plan','weak pawn structure','time pressure','not sure']},
   {k:'expected', q:"Before your opponent's strongest move, what did you expect them to play?", text:true},
 ];
@@ -1972,7 +1974,12 @@ function rfRender(){
   $('#rfDots').textContent=RF.steps.map((_,i)=>i<RF.idx?'●':i===RF.idx?'◉':'○').join(' ');
   $('#rfBack').style.display=RF.idx>0?'':'none';
   const body=$('#rfBody');
-  let h=`<h2 style="font-size:15px;margin:0 0 10px">${st.q}</h2>`;
+  // anchor later questions to the picked moment (shown on the board) — never "in general"
+  const mp=RF.answers.movePly;
+  const mvLbl = mp ? `move ${mvNoOf(mp)} (${RF.g.analysis[mp-1].san})` : null;
+  let qtext = st.q.replace('{at}', mvLbl ? ` around <b>${mvLbl}</b>` : (RF.mode==='std' ? ' at that moment' : ' in this game'));
+  if(st.k==='expected' && mvLbl) qtext = `Right after your <b>${mvLbl}</b>, what did you expect your opponent to play?`;
+  let h=`<h2 style="font-size:15px;margin:0 0 10px">${qtext}</h2>`;
   const chipCss='font-size:13px;padding:8px 12px;border-radius:16px;border:1px solid var(--line);background:transparent;color:inherit;cursor:pointer';
   if(st.chips){
     h+=`<div style="display:flex;gap:8px;flex-wrap:wrap">`+st.chips.map(c=>`<button class="rfchip" data-v="${escT(c)}" style="${chipCss}">${c}</button>`).join('')+`</div>`;
@@ -1992,6 +1999,7 @@ function rfRender(){
 }
 function rfAnswer(key, val){
   if(val!=='' && val!==undefined && val!==null) RF.answers[key]=val;
+  if(key==='movePly' && val){ RF.ply=+val; rfDrawBoard(); }   // later questions ask about this moment — show it
   RF.idx++;
   if(RF.idx>=RF.steps.length){
     RF.g.reflection={ver:1, mode:RF.mode, answers:RF.answers, at:Date.now()};
