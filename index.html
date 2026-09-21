@@ -17,7 +17,7 @@
   body{background:var(--bg);color:var(--txt);font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
   a{color:var(--acc)}
   button{font:inherit;cursor:pointer}
-  .app{max-width:1120px;margin:0 auto;padding:18px 18px 60px}
+  .app{max-width:1280px;margin:0 auto;padding:18px 18px 60px}
   header.top{display:flex;align-items:center;gap:14px;margin-bottom:14px;flex-wrap:wrap}
   .logo{font-weight:800;font-size:22px;letter-spacing:-.3px}
   .logo b{color:var(--acc)}
@@ -57,9 +57,9 @@
   .bar>span{display:block;height:100%;background:linear-gradient(90deg,var(--acc),var(--acc2));width:0}
   /* board */
   .boardWrap{display:flex;gap:16px;flex-wrap:wrap}
-  .boardCol{width:min(440px,92vw)}
+  .boardCol{width:min(560px,92vw)}
   .board{position:relative;display:grid;grid-template-columns:repeat(8,1fr);grid-template-rows:repeat(8,1fr);aspect-ratio:1/1;width:100%;border-radius:8px;overflow:hidden;border:1px solid var(--line);user-select:none}
-  .sq{position:relative;display:flex;align-items:center;justify-content:center;aspect-ratio:1/1;font-size:min(8vw,40px);line-height:1}
+  .sq{position:relative;display:flex;align-items:center;justify-content:center;aspect-ratio:1/1;font-size:min(9vw,54px);line-height:1}
   .sq.light{background:var(--sqL)}
   .sq.dark{background:var(--sqD)}
   .sq .pc{filter:drop-shadow(0 1px 1px rgba(0,0,0,.35))}
@@ -82,17 +82,17 @@
   .arrowkey span{display:inline-flex;align-items:center;gap:5px}
   .arrowkey i{width:16px;height:0;border-top:3px solid;border-radius:2px}
   .arrowkey .k-good{color:#3ecf8e}.arrowkey .k-bad{color:#ff5364}.arrowkey .k-opp{color:#f0b23c}
-  .gp-row{display:flex;gap:8px;align-items:center;padding:6px 8px;border-radius:8px;cursor:pointer;font-size:13px}
+  .gp-row{display:flex;gap:8px;align-items:center;padding:6px 8px;border-radius:8px;cursor:pointer;font-size:14px}
   .gp-row:hover{background:rgba(110,168,254,.12)}
   .sq.target::before{content:"";position:absolute;width:26%;height:26%;border-radius:50%;background:rgba(20,25,35,.35)}
   .sq.capture::before{content:"";position:absolute;inset:8%;border-radius:50%;border:4px solid rgba(20,25,35,.35)}
   .sq .coord{position:absolute;font-size:9px;color:rgba(20,25,35,.55);font-weight:700}
   .sq.light .coord{color:rgba(40,48,64,.6)} .sq.dark .coord{color:rgba(230,235,245,.7)}
   .sq .coord.f{right:2px;bottom:1px}.sq .coord.r{left:2px;top:1px}
-  .evalbar{width:16px;border-radius:6px;overflow:hidden;background:#20242e;border:1px solid var(--line);display:flex;flex-direction:column;align-self:stretch;min-height:200px}
-  .evalbar .white{background:#eef1f7;width:100%}
-  .evalNum{font-size:12px;text-align:center;color:var(--mut);margin-top:4px}
-  .movelist{max-height:360px;overflow:auto;font-size:13px;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:6px}
+  .evalbar{width:20px;border-radius:6px;overflow:hidden;background:#20242e;border:1px solid var(--line);display:flex;flex-direction:column;align-self:stretch;min-height:200px}
+  .evalbar .white{background:#eef1f7;width:100%;transition:height .35s ease}
+  .evalNum{font-size:13px;text-align:center;color:var(--mut);margin-top:4px}
+  .movelist{max-height:430px;overflow:auto;font-size:15px;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:6px}
   .movelist .mv{display:inline-block;padding:2px 6px;margin:1px;border-radius:6px;cursor:pointer}
   .movelist .mv:hover{background:#2c3242}
   .movelist .mv.cur{background:var(--acc);color:#0b1020;font-weight:700}
@@ -100,7 +100,7 @@
   .mv.blunder{color:var(--bad);font-weight:700}
   .mv.mistake{color:var(--warn);font-weight:700}
   .mv.inaccuracy{color:var(--inacc)}
-  .commentary{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px;margin-top:10px;font-size:14px;min-height:64px}
+  .commentary{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:13px;margin-top:10px;font-size:15.5px;min-height:64px;line-height:1.55}
   .commentary .lead{font-weight:700}
   .commentary .lead.blunder{color:var(--bad)}.commentary .lead.mistake{color:var(--warn)}.commentary .lead.inaccuracy{color:var(--inacc)}.commentary .lead.ok{color:var(--good)}
   .ctrls{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
@@ -123,12 +123,12 @@
   .flash.ok{background:#173023;color:var(--good);border:1px solid #23543a}
   .flash.no{background:#331d1a;color:var(--bad);border:1px solid #5a2f28}
   .train-meta{display:flex;gap:16px;flex-wrap:wrap;color:var(--mut);font-size:13px;margin-bottom:10px}
-  code.mini{background:var(--panel2);padding:1px 5px;border-radius:5px;font-size:12px}
-  .ai{background:linear-gradient(180deg,rgba(139,123,255,.12),rgba(110,168,254,.08));border:1px solid #3a3a6b;border-radius:10px;padding:11px 12px;font-size:14px;line-height:1.5}
+  code.mini{background:var(--panel2);padding:1px 5px;border-radius:5px;font-size:.9em}
+  .ai{background:linear-gradient(180deg,rgba(139,123,255,.12),rgba(110,168,254,.08));border:1px solid #3a3a6b;border-radius:10px;padding:11px 12px;font-size:15px;line-height:1.55}
   .ai .ailead{display:block;font-weight:800;color:var(--acc2);font-size:12px;letter-spacing:.3px;margin-bottom:4px}
   .ai .aitext{white-space:pre-line}
   .ai .chk{display:inline-block;min-width:46px;font-weight:800;color:var(--acc2)}
-  .think{background:linear-gradient(180deg,rgba(110,168,254,.14),rgba(110,168,254,.05));border:1px solid var(--acc);border-radius:10px;padding:11px 12px;font-size:14px;line-height:1.5}
+  .think{background:linear-gradient(180deg,rgba(110,168,254,.14),rgba(110,168,254,.05));border:1px solid var(--acc);border-radius:10px;padding:11px 12px;font-size:15px;line-height:1.55}
   .think .tlead{display:block;font-weight:800;color:var(--acc);font-size:12px;letter-spacing:.3px;margin-bottom:4px}
   .think .guessline{margin-top:8px;font-weight:600}
   .ai.streaming .aitext::after{content:"▋";margin-left:1px;color:var(--acc2);animation:blink 1s steps(1) infinite}
@@ -248,7 +248,7 @@
     </div>
     <div class="card" id="reviewBody">
       <div class="boardWrap">
-        <div class="evalbar" id="reviewEval" title="Engine evaluation (white's perspective)"><div class="white" style="height:50%"></div></div>
+        <div class="evalbar" id="reviewEval" title="Who's better? The white part grows when White is ahead — watch it jump after a blunder"><div class="white" style="height:50%"></div></div>
         <div class="boardCol">
           <div class="board" id="reviewBoard"></div>
           <div class="evalNum" id="reviewEvalNum">—</div>
@@ -403,15 +403,15 @@
   </div>
 </div>
 <div id="reflectModal" style="display:none;position:fixed;inset:0;background:rgba(5,8,18,.86);z-index:70;align-items:center;justify-content:center">
-  <div class="card" style="width:min(880px,96vw);max-height:94vh;overflow:auto">
+  <div class="card" style="width:min(1080px,97vw);max-height:94vh;overflow:auto">
     <div class="row" style="align-items:baseline;gap:10px">
-      <h2 style="margin:0">🪞 Reflect first</h2>
-      <span id="rfDots" class="muted" style="font-size:12px"></span>
-      <a href="#" id="rfSkip" class="muted" style="margin-left:auto;font-size:12px">Skip this time</a>
+      <h2 style="margin:0;font-size:20px">🪞 Reflect first</h2>
+      <span id="rfDots" class="muted" style="font-size:13px"></span>
+      <a href="#" id="rfSkip" class="muted" style="margin-left:auto;font-size:13px">Skip this time</a>
     </div>
-    <p class="sub" style="margin:4px 0 12px">Your read of the game — <b>before</b> the engine's. Step through the moves as much as you like; the engine stays quiet until you finish.</p>
-    <div style="display:flex;gap:16px;flex-wrap:wrap">
-      <div style="width:min(320px,92vw);flex-shrink:0">
+    <p class="sub" style="margin:4px 0 12px;font-size:14px">Your read of the game — <b>before</b> the engine's. Step through the moves as much as you like; the engine stays quiet until you finish.</p>
+    <div style="display:flex;gap:18px;flex-wrap:wrap">
+      <div style="width:min(460px,92vw);flex-shrink:0">
         <div class="board" id="rfBoard"></div>
         <div class="row" style="gap:6px;margin-top:8px;justify-content:center;align-items:center">
           <button class="btn sec" id="rfFirst" style="padding:5px 10px">⏮</button>
@@ -421,11 +421,11 @@
           <span id="rfPos" class="muted" style="font-size:12px"></span>
         </div>
       </div>
-      <div style="flex:1;min-width:260px">
+      <div style="flex:1;min-width:280px">
         <div id="rfBody"></div>
         <div style="margin-top:12px">
-          <div class="muted" style="font-size:11px;margin-bottom:4px">Game history — click any move to see it on the board</div>
-          <div id="rfMoves" style="max-height:170px;overflow:auto;line-height:2;font-size:13px;border:1px solid var(--line);border-radius:10px;padding:6px 10px"></div>
+          <div class="muted" style="font-size:12px;margin-bottom:4px">Game history — click any move to see it on the board</div>
+          <div id="rfMoves" style="max-height:230px;overflow:auto;line-height:2;font-size:15px;border:1px solid var(--line);border-radius:10px;padding:6px 10px"></div>
         </div>
       </div>
     </div>
@@ -983,9 +983,10 @@ function mistakeKind(a){
 function engineDetails(){ return store.meta.engineDetails===true; }
 function applyEngineVis(){
   const on=engineDetails();
-  const bar=$('#reviewEval'); if(bar) bar.style.display=on?'':'none';
+  // the advantage bar always shows (visual, no jargon — every move's consequence at a glance);
+  // the raw numbers stay behind the ⚙ toggle
   const num=$('#reviewEvalNum'); if(num) num.style.display=on?'':'none';
-  const b=$('#rvEngine'); if(b){ b.style.outline=on?'2px solid var(--acc)':'none'; b.title=(on?'Hide':'Show')+' engine details (eval bar & numbers)'; }
+  const b=$('#rvEngine'); if(b){ b.style.outline=on?'2px solid var(--acc)':'none'; b.title=(on?'Hide':'Show')+' engine numbers'; }
 }
 function commentaryFor(a, game){
   if(!a.isUser){
@@ -1979,8 +1980,8 @@ function rfRender(){
   const mvLbl = mp ? `move ${mvNoOf(mp)} (${RF.g.analysis[mp-1].san})` : null;
   let qtext = st.q.replace('{at}', mvLbl ? ` around <b>${mvLbl}</b>` : (RF.mode==='std' ? ' at that moment' : ' in this game'));
   if(st.k==='expected' && mvLbl) qtext = `Right after your <b>${mvLbl}</b>, what did you expect your opponent to play?`;
-  let h=`<h2 style="font-size:15px;margin:0 0 10px">${qtext}</h2>`;
-  const chipCss='font-size:13px;padding:8px 12px;border-radius:16px;border:1px solid var(--line);background:transparent;color:inherit;cursor:pointer';
+  let h=`<h2 style="font-size:17px;margin:0 0 12px">${qtext}</h2>`;
+  const chipCss='font-size:15px;padding:9px 14px;border-radius:18px;border:1px solid var(--line);background:transparent;color:inherit;cursor:pointer';
   if(st.chips){
     h+=`<div style="display:flex;gap:8px;flex-wrap:wrap">`+st.chips.map(c=>`<button class="rfchip" data-v="${escT(c)}" style="${chipCss}">${c}</button>`).join('')+`</div>`;
   }else if(st.moves){
