@@ -942,15 +942,22 @@ async function analyzeGame(game, onProgress){
 
 function makePuzzles(game){
   const have=new Set(store.puzzles.map(p=>p.id));
+  // pattern concepts start from tactical MISTAKES too — a kid who keeps slipping 1.5 pawns
+  // to forks needs the fork retest even if they never quite blunder 3.0. (One concept per
+  // pattern, so this never floods anything.)
   for(const a of game.analysis){
-    // drill only tactical blunders — positional slips are for understanding, not memorizing
+    if(!a.isUser || !(a.tag==='blunder'||a.tag==='mistake') || playedIsBest(a) || mistakeKind(a)!=='tactical') continue;
+    const th=tacticThemeOf(a);
+    if(th && LICHESS_THEMES[th] && LICHESS_THEMES[th]!=='mix') conceptOf(th, game.studentId||null, true);
+  }
+  for(const a of game.analysis){
+    // drill only tactical blunders — positional slips are for understanding, not memorizing,
+    // and mistake-tier positions would flood a kid's daily SRS queue
     if(!a.isUser || a.tag!=='blunder' || !a.bestUci || playedIsBest(a) || mistakeKind(a)!=='tactical') continue;
     const id=game.id+':'+a.ply;
     if(have.has(id)) continue;
     const opp=game.analysis[a.ply-2];                    // opponent's move just before this position
     const th=tacticThemeOf(a);
-    // a detected pattern starts its concept clock now: a retest gets scheduled in ~3 days
-    if(th && LICHESS_THEMES[th] && LICHESS_THEMES[th]!=='mix') conceptOf(th, game.studentId||null, true);
     store.puzzles.push({
       id, gameId:game.id, ply:a.ply, fen:a.fenBefore, studentId:game.studentId||null,
       correctSan:a.bestSan, correctUci:a.bestUci, playedSan:a.san,
@@ -1577,15 +1584,17 @@ function renderGames(){
   const wrap=$('#gamesTableWrap');
   if(!games.length){ wrap.innerHTML='<div class="empty">Import games above to get started, or load the demo game.</div>'; return; }
   const t=el('table');
-  t.innerHTML='<thead><tr><th>Date</th><th>You were</th><th>Opponent</th><th>Result</th><th>Moves</th><th>Source</th><th>Blunders</th><th>Puzzles</th><th></th></tr></thead>';
+  t.innerHTML='<thead><tr><th>Date</th><th>You were</th><th>Opponent</th><th>Result</th><th>Moves</th><th>Source</th><th>Blunders</th><th>Mistakes</th><th>Puzzles</th><th></th></tr></thead>';
   const tb=el('tbody');
   for(const g of games.slice().reverse()){
     const bl=g.analysis?g.analysis.filter(a=>a.isUser&&a.tag==='blunder').length:null;
+    const mi=g.analysis?g.analysis.filter(a=>a.isUser&&a.tag==='mistake'&&!playedIsBest(a)).length:null;
     const pzn=store.puzzles.filter(p=>p.gameId===g.id).length;
     const resPill=g.result==='win'?'<span class="pill win">win</span>':g.result==='loss'?'<span class="pill loss">loss</span>':g.result==='draw'?'<span class="pill src">draw</span>':'<span class="pill src">?</span>';
     const tr=el('tr');
     tr.innerHTML=`<td>${g.date||'—'}</td><td>${g.userColor}</td><td>${g.opponent}</td><td>${resPill}</td><td>${g.sanMoves.length}</td><td><span class="pill src">${g.source}</span></td>
       <td>${g.analysis?`<b style="color:var(--bad)">${bl}</b>`:'<span class="muted">—</span>'}</td>
+      <td>${g.analysis?`<b style="color:var(--warn)">${mi}</b>`:'<span class="muted">—</span>'}</td>
       <td>${g.analysis?(pzn?`<span class="gp-count" data-pz="${g.id}" style="cursor:pointer;color:var(--acc)" title="Open this game's puzzle list in Review">🧩 ${pzn}</span>`:'<span class="muted">—</span>'):'<span class="muted">—</span>'}</td>
       <td class="row" style="justify-content:flex-end">${g.analysis
         ? `${pzn?`<button class="btn sec" data-drill="${g.id}" title="Train on this game's ${pzn} puzzle(s) right now">🧩 Drill</button>`:''}<button class="btn sec" data-review="${g.id}"${g.reviewedAt?` title="Last reviewed ${new Date(g.reviewedAt).toLocaleDateString()}"`:''}>${g.reviewedAt?'✓ Review again':'Review'}</button><button class="btn sec" data-reanalyze="${g.id}" title="Re-run with the latest, more accurate analysis">↻</button>`
