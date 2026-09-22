@@ -1588,7 +1588,7 @@ function renderGames(){
       <td>${g.analysis?`<b style="color:var(--bad)">${bl}</b>`:'<span class="muted">—</span>'}</td>
       <td>${g.analysis?(pzn?`<span class="gp-count" data-pz="${g.id}" style="cursor:pointer;color:var(--acc)" title="Open this game's puzzle list in Review">🧩 ${pzn}</span>`:'<span class="muted">—</span>'):'<span class="muted">—</span>'}</td>
       <td class="row" style="justify-content:flex-end">${g.analysis
-        ? `${pzn?`<button class="btn sec" data-drill="${g.id}" title="Train on this game's ${pzn} puzzle(s) right now">🧩 Drill</button>`:''}<button class="btn sec" data-review="${g.id}">Review</button><button class="btn sec" data-reanalyze="${g.id}" title="Re-run with the latest, more accurate analysis">↻</button>`
+        ? `${pzn?`<button class="btn sec" data-drill="${g.id}" title="Train on this game's ${pzn} puzzle(s) right now">🧩 Drill</button>`:''}<button class="btn sec" data-review="${g.id}"${g.reviewedAt?` title="Last reviewed ${new Date(g.reviewedAt).toLocaleDateString()}"`:''}>${g.reviewedAt?'✓ Review again':'Review'}</button><button class="btn sec" data-reanalyze="${g.id}" title="Re-run with the latest, more accurate analysis">↻</button>`
         : `<button class="btn" data-analyze="${g.id}">Analyze</button>`}</td>`;
     tb.appendChild(tr);
   }
@@ -1640,7 +1640,7 @@ let rv={game:null, ply:0, orient:'white'};
 function renderReviewPicker(){
   const sel=$('#reviewPicker'); const analyzed=gamesFor(null).filter(g=>g.analysis);
   sel.innerHTML = analyzed.length? '' : '<option>No analyzed games yet</option>';
-  analyzed.slice().reverse().forEach(g=>{ const o=el('option'); o.value=g.id; const bl=g.analysis.filter(a=>a.isUser&&a.tag==='blunder').length; const rl=g.result==='win'?'W':g.result==='loss'?'L':g.result==='draw'?'D':'?'; o.textContent=`${g.date||'game'} · ${rl} · ${g.userColor} vs ${g.opponent} · ${bl} blunder(s)`; sel.appendChild(o); });
+  analyzed.slice().reverse().forEach(g=>{ const o=el('option'); o.value=g.id; const bl=g.analysis.filter(a=>a.isUser&&a.tag==='blunder').length; const rl=g.result==='win'?'W':g.result==='loss'?'L':g.result==='draw'?'D':'?'; o.textContent=`${g.reviewedAt?'✓ ':''}${g.date||'game'} · ${rl} · ${g.userColor} vs ${g.opponent} · ${bl} blunder(s)`; sel.appendChild(o); });
   sel.onchange=()=>openReview(sel.value);
 }
 function openReview(id){
@@ -1655,6 +1655,9 @@ function openReview(id){
     + (g.structure?` · ⛰ ${g.structure.name}`:'');
   if(g.structure) $('#reviewMeta').title=g.structure.tip;
   rp=null;                                             // switching games always leaves replay mode
+  const firstLook=!g.reviewedAt;                       // remember this game has been reviewed
+  g.reviewedAt=Date.now();
+  if(firstLook){ save(); renderGames(); }
   drawReview();
   // Reflect → Reveal: reconstruct your own thinking before the engine shows anything
   if(g.analysis && !g.reflection && !g._rfDismissed) openReflect(g);
