@@ -2398,7 +2398,9 @@ function nextPuzzle(){
   }
   tn.pos=new Chess(tn.cur.fen); tn.sel=null; tn.targets=[]; tn.solved=false; tn.arrows=[];
   tn.orient = tn.pos.turn()==='w'?'white':'black';
-  $('#trainSide').textContent=(tn.pos.turn()==='w'?'White':'Black')+' to move — find the best move.';
+  // show what the opponent just did — the first habit is always "Why? What changed?"
+  $('#trainSide').innerHTML=(tn.pos.turn()==='w'?'White':'Black')+' to move'
+    +(tn.cur.oppLastSan?` — your opponent just played <code class="mini">${tn.cur.oppLastSan}</code> (highlighted). What changed? Find the best move.`:' — find the best move.');
   if(tn.cur.external){
     $('#trainInfo').innerHTML=`🧩 Fresh from Lichess · <b>${tn.cur.theme}</b> · puzzle rating ${tn.cur.rating}. Find the best move.`;
     drawTrain(); return;
@@ -2410,8 +2412,10 @@ function nextPuzzle(){
   drawTrain();
 }
 function drawTrain(arrowsOverride){
+  const u=(tn.cur && !tn.solved && tn.cur.oppLastUci) ? tn.cur.oppLastUci : null;   // opponent's setup move
   renderBoard($('#trainBoard'), tn.pos, {
     orientation:tn.orient, interactive:!tn.solved, selected:tn.sel, targets:tn.targets,
+    lastMove: u ? {from:u.slice(0,2), to:u.slice(2,4)} : null,
     arrows: arrowsOverride!==undefined ? arrowsOverride : (tn.arrows||[]), onSquare:onTrainSquare
   });
 }
