@@ -1589,7 +1589,10 @@ function renderGames(){
   for(const g of games.slice().reverse()){
     const bl=g.analysis?g.analysis.filter(a=>a.isUser&&a.tag==='blunder').length:null;
     const mi=g.analysis?g.analysis.filter(a=>a.isUser&&a.tag==='mistake'&&!playedIsBest(a)).length:null;
-    const pzn=store.puzzles.filter(p=>p.gameId===g.id).length;
+    const gpz=store.puzzles.filter(p=>p.gameId===g.id);
+    const pzn=gpz.length;
+    const drilled=pzn>0 && gpz.every(p=>p.history.length);              // every puzzle attempted at least once
+    const missedN=gpz.filter(p=>p.history.length && !p.history[p.history.length-1].correct).length;
     const resPill=g.result==='win'?'<span class="pill win">win</span>':g.result==='loss'?'<span class="pill loss">loss</span>':g.result==='draw'?'<span class="pill src">draw</span>':'<span class="pill src">?</span>';
     const tr=el('tr');
     tr.innerHTML=`<td>${g.date||'—'}</td><td>${g.userColor}</td><td>${g.opponent}</td><td>${resPill}</td><td>${g.sanMoves.length}</td><td><span class="pill src">${g.source}</span></td>
@@ -1597,7 +1600,7 @@ function renderGames(){
       <td>${g.analysis?`<b style="color:var(--warn)">${mi}</b>`:'<span class="muted">—</span>'}</td>
       <td>${g.analysis?(pzn?`<span class="gp-count" data-pz="${g.id}" style="cursor:pointer;color:var(--acc)" title="Open this game's puzzle list in Review">🧩 ${pzn}</span>`:'<span class="muted">—</span>'):'<span class="muted">—</span>'}</td>
       <td class="row" style="justify-content:flex-end">${g.analysis
-        ? `${pzn?`<button class="btn sec" data-drill="${g.id}" title="Train on this game's ${pzn} puzzle(s) right now">🧩 Drill</button>`:''}<button class="btn sec" data-review="${g.id}"${g.reviewedAt?` title="Last reviewed ${new Date(g.reviewedAt).toLocaleDateString()}"`:''}>${g.reviewedAt?'✓ Review again':'Review'}</button><button class="btn sec" data-reanalyze="${g.id}" title="Re-run with the latest, more accurate analysis">↻</button>`
+        ? `${pzn?`<button class="btn sec" data-drill="${g.id}" title="${drilled?`All ${pzn} tried before${missedN?` — ${missedN} still missed`:''}; run them again`:`Train on this game's ${pzn} puzzle(s) right now`}">${drilled?'✓ Drill again':'🧩 Drill'}</button>`:''}<button class="btn sec" data-review="${g.id}"${g.reviewedAt?` title="Last reviewed ${new Date(g.reviewedAt).toLocaleDateString()}"`:''}>${g.reviewedAt?'✓ Review again':'Review'}</button><button class="btn sec" data-reanalyze="${g.id}" title="Re-run with the latest, more accurate analysis">↻</button>`
         : `<button class="btn" data-analyze="${g.id}">Analyze</button>`}</td>`;
     tb.appendChild(tr);
   }
@@ -1868,7 +1871,7 @@ function renderGamePuzzles(g){
             <span class="muted" style="margin-left:auto">box ${p.box}</span>
           </div>`;
         }).join('')
-      + `<button class="btn sec" id="drillGameBtn" style="margin-top:8px">🎯 Drill these ${pz.length} now</button>`;
+      + `<button class="btn sec" id="drillGameBtn" style="margin-top:8px">🎯 ${pz.every(p=>p.history.length)?`Drill these ${pz.length} again`:`Drill these ${pz.length} now`}</button>`;
   }else{
     html+='<div class="muted" style="font-size:13px">🧩 No drill puzzles from this game — no tactical blunders found.</div>';
   }
@@ -2346,7 +2349,12 @@ function renderLpBar(){
   const retest=dueC.length ? `<div class="row" style="gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
     <span class="sub" style="margin:0">🔁 Patterns due for a retest:</span>
     ${dueC.map(c=>`<button class="btn" data-retest="${c.theme}" title="A fresh set of ${c.theme} puzzles — prove the pattern stuck">${c.theme}</button>`).join('')}</div>` : '';
-  bar.innerHTML=retest+`<div class="row" style="gap:8px;align-items:center;flex-wrap:wrap">
+  // drill review: every own puzzle whose LAST attempt was wrong — practice them again on demand
+  const missed=puzzlesFor(tn.profile).filter(p=>p.history.length && !p.history[p.history.length-1].correct);
+  const missedRow=missed.length ? `<div class="row" style="gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+    <span class="sub" style="margin:0">📌 Drill review — the ones that got away:</span>
+    <button class="btn" id="missedDrill">Practice ${missed.length} missed puzzle${missed.length>1?'s':''}</button></div>` : '';
+  bar.innerHTML=retest+missedRow+`<div class="row" style="gap:8px;align-items:center;flex-wrap:wrap">
     <span class="sub" style="margin:0">🧩 Fresh Lichess puzzles${Object.keys(slugs).length?' on your weak patterns':''}:</span>
     ${btns}<button class="btn sec" data-lp="mix">surprise mix</button>
     <select id="lpCount" title="How many puzzles to fetch"><option value="10">10</option><option value="20">20</option><option value="30">30</option><option value="50">50</option></select>
@@ -2355,6 +2363,7 @@ function renderLpBar(){
   const el=$('#lpStatus'); if(el) el.textContent=keep;
   bar.querySelectorAll('[data-lp]').forEach(b=>b.onclick=()=>startLichessSet(b.dataset.lp));
   bar.querySelectorAll('[data-retest]').forEach(b=>b.onclick=()=>buildLadder(b.dataset.retest, null, tn.profile));
+  const md=$('#missedDrill'); if(md) md.onclick=()=>{ tn.seed=missed.slice().sort((a,b)=>b.lossCp-a.lossCp); startTrain(); };
 }
 function startTrain(){
   if(tn.seed && tn.seed.length){ tn.queue=tn.seed.slice(); tn.seed=null; tn.ladder=tn.seedLadder||null; tn.seedLadder=null; renderTrainMeta(); nextPuzzle(); return; }
